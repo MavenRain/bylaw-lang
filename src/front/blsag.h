@@ -1,0 +1,69 @@
+/* bLSAG ring signatures over BN254 G1 in the host (docs/PLAN.md section 8,
+   builder call S8, slice B2a). The kernel verify definition (B3) must use the
+   same hash chain order as front/blsag.c.
+
+   Words are U256 (front/u256.h), points are affine G1 (front/bn254.h) and
+   hash(a, b) is the kit `hash`: KECCAK256 of the 64 packed big endian bytes.
+   The member index i runs from 0 in constructor order; the word c_1 of the
+   plan is the challenge of member 0. */
+#ifndef LANG_FRONT_BLSAG_H
+#define LANG_FRONT_BLSAG_H
+
+#include <stdint.h>
+
+#include "front/bn254.h"
+#include "front/u256.h"
+
+/* The largest ring (O28). */
+#define BLSAG_RING_MAX 28u
+/* H_p gives up after this many counters. Each counter succeeds with a chance
+   near 0.4, so the bound is not reached. */
+#define BLSAG_HP_TRIES 256u
+/* The bound K of the open H_p chain on the chain (restrict-lang S7, Q-S7-5
+   (a)): the counters 0 to K minus 1 of the try and increment. */
+#define RESTRICT_HP_TRIES 8u
+
+/* The domain tag: the ASCII bytes of "orbit" as a word (builder default). */
+extern const U256 BLSAG_TAG;
+
+typedef enum {
+  BLSAG_REJECT,
+  BLSAG_ACCEPT,
+  BLSAG_TRAP /* the ring size is bad, the key image is off the curve or H_p found no point */
+} BlsagVerdict;
+
+/* X mod r for any word (a hash word is below about 5.3 r). */
+void blsag_reduce(U256 *out, const U256 *x);
+/* The test key x_i = hash(tag, i) mod r. */
+void blsag_key(U256 *out, uint64_t i);
+/* H_p(P) by try and increment: x_k = hash(hash(P.x, P.y), k) from k = 0; the
+   first x_k below p with x_k^3 + 3 a square gives the point, with y the
+   smaller root. *COUNTER gets k. 1, or 0 when BLSAG_HP_TRIES counters fail.
+   OUT can be P. */
+int blsag_hash_point(G1 *out, uint32_t *counter, const G1 *p);
+/* The ring digest: D_0 = hash(P_0.x, P_0.y) and D_k = hash(hash(D_(k minus
+   1), P_k.x), P_k.y). N is 1 to BLSAG_RING_MAX. */
+void blsag_digest(U256 *out, const G1 *ring, uint32_t n);
+/* Signs the vote (POLL, CHOICE) for the ring with the key X, whose point x G
+   must be in the ring. SIG gets the N + 3 words c_1, s_1 to s_n, I.x, I.y.
+   Deterministic scalars bind tag, X, ring digest, poll, choice, index and
+   role (private alpha or public response). 1, or 0 when N is 0 or above
+   BLSAG_RING_MAX, X is 0 or r or more, or x G is not in the ring. */
+int blsag_sign(U256 *sig, const G1 *ring, uint32_t n, const U256 *x, const U256 *poll, const U256 *choice);
+/* Checks the N + 3 words SIG for the ring and the vote: accept when the
+   chain closes (c_(n+1) = c_1), each s_i is below r and I is not (0, 0). No
+   range test on c_1. */
+BlsagVerdict blsag_verify(const G1 *ring, uint32_t n, const U256 *poll, const U256 *choice, const U256 *sig);
+
+/* The context ops (restrict-lang S5, Q-S5-1 (a), O8). W is the context word
+   (the contract word) and M the message word (the wallet word). */
+/* H_p at W: blsag_hash_point with the seed hash(hash(P.x, P.y), W). */
+int blsag_hash_point_at(G1 *out, uint32_t *counter, const G1 *p, const U256 *w);
+/* blsag_sign with H_p at W for each ring member, W in the place of the poll
+   and M in the place of the choice. The key image is I = x H_p at W (P), so
+   one key gives another key image in each context. */
+int blsag_sign_at(U256 *sig, const G1 *ring, uint32_t n, const U256 *x, const U256 *w, const U256 *m);
+/* blsag_verify for a signature of blsag_sign_at. */
+BlsagVerdict blsag_verify_at(const G1 *ring, uint32_t n, const U256 *w, const U256 *m, const U256 *sig);
+
+#endif

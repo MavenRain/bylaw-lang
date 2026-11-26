@@ -5,9 +5,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "front/u256.h"
+
 typedef enum {
   TERM_VAR,   /* name */
   TERM_NAT,   /* nat */
+  TERM_WORD,  /* word; nat is WORD_U256 or WORD_ADDR */
   TERM_APP,   /* left applied to right */
   TERM_LAM,   /* fun (name : left) => right; left is NULL for a bare binder */
   TERM_PI,    /* (name : left) -> right; name is NULL for left -> right */
@@ -20,6 +23,7 @@ struct Term {
   TermKind kind;
   int line;
   int col;
+  const U256 *word; /* WORD: the limbs */
   const char *name;
   uint64_t nat;
   const Term *left;
@@ -45,7 +49,9 @@ typedef struct {
 typedef enum {
   DECL_DEF,    /* def [rec] name : type := body */
   DECL_AXIOM,  /* axiom name : type */
-  DECL_FAMILY  /* family name params := ctor | ... */
+  DECL_FAMILY, /* family name params := ctor | ... */
+  DECL_RULES   /* rules R S M T := r1 | ... | rk (restrict-lang S4): the
+                  params are S M T, the ctors the rules; elaborated */
 } DeclKind;
 
 /* A family is legal only in the domain file (rule R1). */
@@ -58,6 +64,8 @@ typedef struct {
   DeclKind kind;
   Origin origin;
   int is_rec;
+  int is_state; /* state State := ctor fields (U3) */
+  int is_event; /* event NAME fields: a constructor of Out (U3) */
   int line;
   int col;
   const char *name;

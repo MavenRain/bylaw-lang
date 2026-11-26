@@ -1,0 +1,2 @@
+-- S1 U6: ecMul takes the point first, then the word.
+def f : Prod U256 U256 := ecMul 2u (pair 1u 2u)

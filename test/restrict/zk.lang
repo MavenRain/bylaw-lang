@@ -1,0 +1,23 @@
+-- S1 U7 bLSAG zk ops (restrict-lang a0f4784 examples/zk.lang lines 8-16; values from test/eval/expect.txt lines 122-127).
+-- restrict tests the At forms only in examples/restrict.lang (sigD to l7Verifies, U7b); these rows use a literal ring.
+def g : Prod U256 U256 := pair 1u 2u
+def k0 : U256 := zkKey 0
+def k1 : U256 := zkKey 1
+def k2 : U256 := zkKey 2
+def p0 : Prod U256 U256 := ecMul g k0
+def p1 : Prod U256 U256 := ecMul g k1
+def p2 : Prod U256 U256 := ecMul g k2
+def k0Row : Eq U256 k0 15083935376438658469273337099243728651644835498562697954037268925123139172862u := refl
+def k1Row : Eq U256 k1 1689986740603048180767712434556777272610696992813169008045352595718737410640u := refl
+def k2Row : Eq U256 k2 9164318949849171497250571870979521311949336642794713248783618994817639871809u := refl
+def p0Row : Eq (Prod U256 U256) p0 (pair 3158628130809131474089875976652879399357254575535880020658385832492965979946u 9002457540433470152490850659345107267983836540995114289001868327279787047667u) := refl
+def p1Row : Eq (Prod U256 U256) p1 (pair 21576012433999932920735124394921461927089194087037988485273198605798414207857u 16628399031297167549133710224180735038020239690938175651395637673254031640298u) := refl
+def p2Row : Eq (Prod U256 U256) p2 (pair 4511345014148855701978391702360003017939601606553168540311183374506603172252u 2508286508073671329325533888106374632645724638115976139622841388553619003967u) := refl
+def ring2 : List (Prod U256 U256) := cons p0 (cons p1 nil)
+def sigA : List U256 := zkSignAt ring2 k0 7u 9u
+def okA : Eq Flag (zkVerifyAt ring2 7u 9u sigA) flagYes := refl
+def msgA : Eq Flag (zkVerifyAt ring2 7u 8u sigA) flagNo := refl
+def ctxA : Eq Flag (zkVerifyAt ring2 6u 9u sigA) flagNo := refl
+def swapA : Eq Flag (zkVerifyAt (cons p1 (cons p0 nil)) 7u 9u sigA) flagNo := refl
+def shortA : Eq Flag (zkVerifyAt ring2 7u 9u (cons 1u nil)) flagNo := refl
+def hpOn : Eq (Prod U256 U256) (ecAdd (zkHpAt p0 7u) (pair 0u 0u)) (zkHpAt p0 7u) := refl

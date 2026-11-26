@@ -1,0 +1,15 @@
+-- U4a (Q-S1-10 (a)): the dependent eliminator elim over Sum A B and Unit,
+-- ported from restrict-lang. pick is a non-dependent case split; dep has a
+-- motive that depends on the scrutinee (Code gives Nat on inl, Flag on inr).
+def pick : Sum Unit Unit -> Nat :=
+  fun (s : Sum Unit Unit) => elim (fun (t : Sum Unit Unit) => Nat) (fun (a : Unit) => 1) (fun (b : Unit) => 2) s
+def pickL : Nat := pick (inl unit)
+def pickR : Nat := pick (inr unit)
+def unitE : Nat := elim (fun (u : Unit) => Nat) 7 unit
+def Code : Sum Unit Unit -> Type 0 :=
+  fun (x : Sum Unit Unit) => either (fun (u : Unit) => Nat) (fun (u : Unit) => Flag) x
+def dep : (x : Sum Unit Unit) -> Code x :=
+  fun (x : Sum Unit Unit) => elim Code (fun (u : Unit) => 5) (fun (u : Unit) => flagYes) x
+def depL : Nat := dep (inl unit)
+def depR : Flag := dep (inr unit)
+def depLIs : Eq Nat depL 5 := refl

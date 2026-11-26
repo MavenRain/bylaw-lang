@@ -1,0 +1,15 @@
+-- S1 U1 words (restrict-lang a0f4784): U256 as four limbs, Addr, literals, ops.
+def a : Addr := 0x00000000000000000000000000000000000000aa
+def b : Addr := 0x00000000000000000000000000000000000000bb
+def big : U256 := 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffu
+def sum : Eq U256 (u256Add 2u 3u) 5u := refl
+def floor : Eq U256 (u256Sub 2u 3u) 0u := refl
+def lifted : Eq U256 (toU256 7) 7u := refl
+def back : Eq Nat (toNat 42u) 42 := refl
+def addrWord : Eq U256 (addrToU256 a) 170u := refl
+def le : Eq Flag (u256Le 2u 3u) flagYes := refl
+def apart : Eq Flag (addrEq a b) flagNo := refl
+def hexEq : Eq Flag (u256Eq 0xffu 255u) flagYes := refl
+def small : Nat := toNat (u256Add 40u 2u)
+def wide : Nat := toNat big
+def overNat : Nat := toNat (u256Add big 1u)

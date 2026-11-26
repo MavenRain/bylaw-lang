@@ -4,7 +4,11 @@
    hint) or its type is inferred. Two types are equal when their normal forms
    are equal (front/eval.c). The checker writes core terms (front/core.h). */
 #include "front/check.h"
+#include "front/lexer.h"
+#include "front/parser.h"
 
+#include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
 #define CHECK_DEPTH_LIMIT 2000u
@@ -56,6 +60,7 @@ typedef enum {
   RULE_SIGMA_PART,
   RULE_EITHER,
   RULE_OPTION,
+  RULE_ELIM,
   RULE_PURE,
   RULE_MAP,
   RULE_BIND,
@@ -67,7 +72,14 @@ typedef enum {
   RULE_CONG,
   RULE_TRANSPORT,
   RULE_NAT2,
-  RULE_FLAG_IF
+  RULE_U256_2,
+  RULE_FIXED,
+  RULE_ADDR2,
+  RULE_TO_U256,
+  RULE_FLAG_IF,
+  RULE_KMAP,
+  RULE_KMAP_GET,
+  RULE_KMAP_SET
 } Rule;
 
 typedef struct {
@@ -82,6 +94,8 @@ typedef struct {
 static const Builtin BUILTINS[] = {
   {"Nat", 0, RULE_TYPE0, OP_NAT, OP_NAT, 0},
   {"Flag", 0, RULE_TYPE0, OP_FLAG, OP_NAT, 0},
+  {"U256", 0, RULE_TYPE0, OP_U256, OP_NAT, 0},
+  {"Addr", 0, RULE_TYPE0, OP_ADDR, OP_NAT, 0},
   {"Unit", 0, RULE_TYPE0, OP_UNIT, OP_NAT, 0},
   {"Prod", 2, RULE_TYPE2, OP_PROD, OP_NAT, 0},
   {"Sum", 2, RULE_TYPE2, OP_SUM, OP_NAT, 0},
@@ -106,6 +120,7 @@ static const Builtin BUILTINS[] = {
   {"payload", 1, RULE_SIGMA_PART, OP_PAYLOAD, OP_NAT, 1},
   {"either", 3, RULE_EITHER, OP_EITHER, OP_SUM, 0},
   {"option", 3, RULE_OPTION, OP_OPTION_ELIM, OP_OPTION, 0},
+  {"elim", 3, RULE_ELIM, OP_ELIM, OP_SUM, 0},
   {"pure", 1, RULE_PURE, OP_PURE, OP_NAT, 0},
   {"map", 2, RULE_MAP, OP_MAP, OP_NAT, 0},
   {"bind", 2, RULE_BIND, OP_BIND, OP_NAT, 0},
@@ -121,7 +136,26 @@ static const Builtin BUILTINS[] = {
   {"natMul", 2, RULE_NAT2, OP_NAT_MUL, OP_NAT, 0},
   {"natEq", 2, RULE_NAT2, OP_NAT_EQ, OP_FLAG, 0},
   {"natLe", 2, RULE_NAT2, OP_NAT_LE, OP_FLAG, 0},
-  {"flagIf", 3, RULE_FLAG_IF, OP_FLAG_IF, OP_FLAG, 0}
+  {"flagIf", 3, RULE_FLAG_IF, OP_FLAG_IF, OP_FLAG, 0},
+  {"u256Add", 2, RULE_U256_2, OP_U256_ADD, OP_U256, 0},
+  {"u256Sub", 2, RULE_U256_2, OP_U256_SUB, OP_U256, 0},
+  {"u256Le", 2, RULE_U256_2, OP_U256_LE, OP_FLAG, 0},
+  {"u256Eq", 2, RULE_U256_2, OP_U256_EQ, OP_FLAG, 0},
+  {"toU256", 1, RULE_TO_U256, OP_TO_U256, OP_U256, 0},
+  {"toNat", 1, RULE_U256_2, OP_TO_NAT, OP_NAT, 0},
+  {"addrEq", 2, RULE_ADDR2, OP_ADDR_EQ, OP_FLAG, 0},
+  {"addrToU256", 1, RULE_ADDR2, OP_ADDR_TO_U256, OP_U256, 0},
+  {"hash", 2, RULE_U256_2, OP_HASH, OP_U256, 0},
+  {"ecAdd", 2, RULE_FIXED, OP_EC_ADD, OP_PROD, 0},
+  {"ecMul", 2, RULE_FIXED, OP_EC_MUL, OP_PROD, 0},
+  {"zkKey", 1, RULE_FIXED, OP_ZK_KEY, OP_U256, 0},
+  {"zkHpAt", 2, RULE_FIXED, OP_ZK_HP_AT, OP_PROD, 0},
+  {"zkSignAt", 4, RULE_FIXED, OP_ZK_SIGN_AT, OP_LIST, 0},
+  {"zkVerifyAt", 4, RULE_FIXED, OP_ZK_VERIFY_AT, OP_FLAG, 0},
+  {"Map", 2, RULE_KMAP, OP_KMAP, OP_NAT, 0},
+  {"mapEmpty", 0, RULE_EMPTY, OP_KMAP_OF, OP_KMAP, 0},
+  {"mapGet", 2, RULE_KMAP_GET, OP_KMAP_GET, OP_KMAP, 0},
+  {"mapSet", 3, RULE_KMAP_SET, OP_KMAP_SET, OP_KMAP, 0}
 };
 
 #define BUILTIN_COUNT ((uint32_t)(sizeof BUILTINS / sizeof BUILTINS[0]))
@@ -161,6 +195,11 @@ static const Core *nul(int failed) {
   return NULL;
 }
 
+static const Value *vnul(int failed) {
+  (void)failed;
+  return NULL;
+}
+
 static Core *new_core(Checker *c, CoreKind kind) {
   Core *k = arena_alloc(c->m->arena, sizeof *k);
   if (k == NULL) {
@@ -182,6 +221,15 @@ static const Core *core_leaf(Checker *c, CoreKind kind, uint64_t nat) {
   Core *k = new_core(c, kind);
   if (k != NULL)
     k->nat = nat;
+  return k;
+}
+
+static const Core *core_word(Checker *c, uint64_t sort, const U256 *word) {
+  Core *k = new_core(c, CORE_WORD);
+  if (k != NULL) {
+    k->nat = sort;
+    k->word = word;
+  }
   return k;
 }
 
@@ -508,7 +556,7 @@ static const Core *rule_inj(Call *k) {
 
 static const Core *rule_empty(Call *k) {
   if (!val_is(k->hint, k->b->result))
-    return need_type(k, k->b->result == OP_OPTION ? "Option A" : "List A");
+    return need_type(k, k->b->result == OP_OPTION ? "Option A" : k->b->result == OP_KMAP ? "Map K V" : "List A");
   k->type = k->hint;
   return op3(k->c, k->b->op, 0, 0, NULL, NULL, NULL);
 }
@@ -615,6 +663,98 @@ static const Core *rule_option(Call *k) {
   f = z == NULL ? NULL : check(c, k->args[1], val_arrow(c->m, ot->args[0], res));
   k->type = res;
   return op3(c, OP_OPTION_ELIM, 0, 3, z, f, o);
+}
+
+/* bylaw-lang S1 U4a (restrict-lang S4): the type of case I of elim with
+   the motive PV on a value of type ST: (a : A) -> P (inl a),
+   (b : B) -> P (inr b), or P unit. */
+static const Value *elim_case(Checker *c, const Value *pv, const Value *st, uint32_t i) {
+  const Value *x = val_var(c->m, c->level);
+  if (val_is(st, OP_UNIT))
+    return apply_value(c->m, pv, tyop(c, OP_UNIT_VAL, 0, NULL, NULL, NULL));
+  return here(c, core_bind(c, CORE_PI, i == 0u ? "a" : "b", quote_value(c->m, c->level, st->args[i]),
+                           quote_value(c->m, c->level + 1u, apply_value(c->m, pv, tyop(c, i == 0u ? OP_INL : OP_INR, 1, x, NULL, NULL)))));
+}
+
+/* A printed motive has no binder annotation. Its domain can instead come
+   from the scrutinee at the Unit or Sum argument position. */
+static const Value *elim_domain(Checker *c, const Term *const *args, uint32_t argc) {
+  const Value *dom = lam_domain(c, args[0]);
+  uint32_t i;
+  if (dom != NULL || args[0]->kind != TERM_LAM || args[0]->left != NULL)
+    return dom;
+  for (i = 2u; i < argc && i < 4u; i++) {
+    if (try_infer(c, args[i], &dom) != NULL && val_is(dom, i == 2u ? OP_UNIT : OP_SUM))
+      return dom;
+  }
+  return NULL;
+}
+
+/* The last domain S of the motive type PT = (x1 : X1) -> .. -> (s : S) ->
+   Type k, with *D the number of domains before S. */
+static const Value *motive_domain(Checker *c, const Value *pt, uint32_t *d) {
+  const Value *v = pt;
+  uint32_t n;
+  for (n = 0; v != NULL && v->kind == VAL_PI; n++) {
+    const Value *cod = closure_apply(c->m, v, val_var(c->m, c->level + n));
+    if (cod != NULL && cod->kind == VAL_UNIV) {
+      *d = n;
+      return v->dom;
+    }
+    v = cod;
+  }
+  return vnul(FAIL(c, "TYPE_MISMATCH", "elim needs a motive of type X -> Type k, found a term of type %s", show(c, pt)));
+}
+
+/* elim P c1 .. cn x (restrict-lang USER ruling S4, bylaw-lang S1 U4a):
+   the dependent eliminator of Sum A B (two cases) and Unit (one case),
+   with the motive P : X -> Type k and the type P x. Nat, List, Option,
+   Eq or a family has no elim (the restrict S7 B1 family elim is not
+   ported). */
+static const Core *rule_elim(Call *k) {
+  Checker *c = k->c;
+  const Value *st = elim_domain(c, k->args, k->argc);
+  const Value *pt = NULL;
+  const Value *pv;
+  const Core *cores[4] = {NULL, NULL, NULL, NULL};
+  const Core *s;
+  uint32_t want;
+  uint32_t d = 0;
+  uint32_t i;
+  if (st != NULL && k->args[0]->kind == TERM_LAM && k->args[0]->left == NULL) {
+    uint64_t level = 0;
+    const Core *body;
+    if (!push(c, k->args[0]->name, st))
+      return NULL;
+    body = check_type(c, k->args[0]->right, &level);
+    pop(c);
+    cores[0] = core_bind(c, CORE_LAM, k->args[0]->name, NULL, body);
+    pt = val_arrow(c->m, st, val_univ(c->m, level));
+  } else {
+    cores[0] = infer(c, k->args[0], &pt);
+  }
+  if (cores[0] == NULL)
+    return NULL;
+  st = motive_domain(c, pt, &d);
+  if (st == NULL)
+    return NULL;
+  if (d != 0u || (!val_is(st, OP_SUM) && !val_is(st, OP_UNIT)))
+    return nul(FAIL(c, "TYPE_MISMATCH", "elim needs a motive on Sum A B or Unit, found a motive of type %s", show(c, pt)));
+  want = val_is(st, OP_SUM) ? 2u : 1u;
+  if (k->argc < want + 2u)
+    return nul(FAIL(c, "TYPE_MISMATCH", "elim on %s needs a motive, %u cases and a scrutinee", show(c, st), want));
+  s = check(c, k->args[want + 1u], st);
+  if (s == NULL)
+    return NULL;
+  pv = here(c, cores[0]);
+  for (i = 0; i < want && cores[i] != NULL; i++)
+    cores[i + 1u] = check(c, k->args[i + 1u], elim_case(c, pv, st, i));
+  if (cores[want] == NULL)
+    return NULL;
+  cores[want + 1u] = s;
+  k->type = apply_value(c->m, pv, here(c, s));
+  k->used = want + 2u;
+  return core_op(c, OP_ELIM, want, 0, cores, want + 2u);
 }
 
 static const Core *rule_pure(Call *k) {
@@ -853,6 +993,55 @@ static const Core *rule_nat2(Call *k) {
   return op3(c, k->b->op, 0, 2, x, y, NULL);
 }
 
+/* ecAdd and ecMul (U6) and zkKey, zkHpAt, zkSignAt and zkVerifyAt (U7;
+   restrict-lang rule_fixed, S2 R17 and S8 B2a): fixed signatures over U256,
+   Nat, G1 = Prod U256 U256, a ring List G1 and a word list List U256. The
+   result is the row result; OP_PROD in the row means G1 and OP_LIST means
+   List U256. */
+static const Core *rule_fixed(Call *k) {
+  enum { SHAPE_U256, SHAPE_G1, SHAPE_NAT, SHAPE_RING, SHAPE_WORDS, ROW_COUNT = 6 };
+  static const struct {
+    Op op;
+    unsigned char arg[4];
+  } ROWS[ROW_COUNT] = {
+    {OP_EC_ADD, {SHAPE_G1, SHAPE_G1, SHAPE_U256, SHAPE_U256}},
+    {OP_EC_MUL, {SHAPE_G1, SHAPE_U256, SHAPE_U256, SHAPE_U256}},
+    {OP_ZK_KEY, {SHAPE_NAT, SHAPE_U256, SHAPE_U256, SHAPE_U256}},
+    {OP_ZK_HP_AT, {SHAPE_G1, SHAPE_U256, SHAPE_U256, SHAPE_U256}},
+    {OP_ZK_SIGN_AT, {SHAPE_RING, SHAPE_U256, SHAPE_U256, SHAPE_U256}},
+    {OP_ZK_VERIFY_AT, {SHAPE_RING, SHAPE_U256, SHAPE_U256, SHAPE_WORDS}},
+  };
+  Checker *c = k->c;
+  const Value *u = tyop(c, OP_U256, 0, NULL, NULL, NULL);
+  const Value *g1 = tyop(c, OP_PROD, 2, u, u, NULL);
+  const Value *words = tyop(c, OP_LIST, 1, u, NULL, NULL);
+  const Value *shape[5] = {u, g1, nat_type(c), tyop(c, OP_LIST, 1, g1, NULL, NULL), words};
+  const Core *args[4] = {NULL, NULL, NULL, NULL};
+  uint32_t row = 0;
+  while (row < ROW_COUNT && ROWS[row].op != k->b->op)
+    row++;
+  if (row == ROW_COUNT || k->b->arity > 4u)
+    return NULL;
+  for (uint32_t i = 0; i < k->b->arity; i++) {
+    args[i] = check(c, k->args[i], shape[ROWS[row].arg[i]]);
+    if (args[i] == NULL)
+      return NULL;
+  }
+  k->type = k->b->result == OP_PROD ? g1 : k->b->result == OP_LIST ? words : tyop(c, k->b->result, 0, NULL, NULL, NULL);
+  return core_op(c, k->b->op, 0, 0, args, k->b->arity);
+}
+
+/* u256Add, addrEq, toU256 and the like: each argument has the type former
+   ARG (restrict-lang rule_prim). */
+static const Core *rule_prim(Call *k, Op arg) {
+  Checker *c = k->c;
+  const Value *t = tyop(c, arg, 0, NULL, NULL, NULL);
+  const Core *x = check(c, k->args[0], t);
+  const Core *y = x == NULL || k->b->arity < 2u ? NULL : check(c, k->args[1], t);
+  k->type = tyop(c, k->b->result, 0, NULL, NULL, NULL);
+  return k->b->arity < 2u ? op3(c, k->b->op, 0, 1, x, NULL, NULL) : op3(c, k->b->op, 0, 2, x, y, NULL);
+}
+
 /* flagIf b yes no */
 static const Core *rule_flag_if(Call *k) {
   Checker *c = k->c;
@@ -862,6 +1051,44 @@ static const Core *rule_flag_if(Call *k) {
   const Core *no = yes == NULL ? NULL : check(c, k->args[2], res);
   k->type = res;
   return op3(c, OP_FLAG_IF, 0, 3, b, yes, no);
+}
+
+static int kmap_word(const Value *t, int flag_ok) {
+  return val_is(t, OP_NAT) || val_is(t, OP_U256) || val_is(t, OP_ADDR) || (flag_ok && val_is(t, OP_FLAG));
+}
+
+/* Map K V (slice K4a0): K is Nat, U256 or Addr. V is Nat, Flag, U256 or Addr. */
+static const Core *rule_kmap(Call *k) {
+  const Core *t = rule_type2(k);
+  const Value *v = here(k->c, t);
+  if (v == NULL)
+    return NULL;
+  if (!kmap_word(v->args[0], 0))
+    return nul(FAIL(k->c, "REFUSE_MAP", "the key type of a Map must be Nat, U256 or Addr, found %s", show(k->c, v->args[0])));
+  if (!kmap_word(v->args[1], 1))
+    return nul(FAIL(k->c, "REFUSE_MAP", "the value type of a Map must be Nat, Flag, U256 or Addr, found %s", show(k->c, v->args[1])));
+  return t;
+}
+
+/* mapGet m k and mapSet m k v (slice K4a0). The core puts V first, so the
+   evaluator can make the zero value of V. */
+static const Core *kmap_access(Call *k, int set) {
+  Checker *c = k->c;
+  const Value *t = set && val_is(k->hint, OP_KMAP) ? k->hint : NULL;
+  const Core *map = t != NULL ? check(c, k->args[0], t) : infer(c, k->args[0], &t);
+  const Core *key;
+  const Core *args[4];
+  if (map == NULL)
+    return NULL;
+  if (!val_is(t, OP_KMAP))
+    return nul(FAIL(c, "TYPE_MISMATCH", "%s needs a Map K V, found %s", k->b->name, show(c, t)));
+  key = check(c, k->args[1], t->args[0]);
+  args[0] = op3(c, t->args[1]->op, 0, 0, NULL, NULL, NULL);
+  args[1] = map;
+  args[2] = key;
+  args[3] = set && key != NULL ? check(c, k->args[2], t->args[1]) : NULL;
+  k->type = set ? t : t->args[1];
+  return core_op(c, k->b->op, 0, 0, args, set ? 4u : 3u);
 }
 
 static const Core *rule(Call *k) {
@@ -900,6 +1127,8 @@ static const Core *rule(Call *k) {
     return rule_either(k);
   case RULE_OPTION:
     return rule_option(k);
+  case RULE_ELIM:
+    return rule_elim(k);
   case RULE_PURE:
     return rule_pure(k);
   case RULE_MAP:
@@ -922,8 +1151,22 @@ static const Core *rule(Call *k) {
     return rule_transport(k);
   case RULE_NAT2:
     return rule_nat2(k);
+  case RULE_TO_U256:
+    return rule_prim(k, OP_NAT);
+  case RULE_U256_2:
+    return rule_prim(k, OP_U256);
+  case RULE_FIXED:
+    return rule_fixed(k);
+  case RULE_ADDR2:
+    return rule_prim(k, OP_ADDR);
   case RULE_FLAG_IF:
     return rule_flag_if(k);
+  case RULE_KMAP:
+    return rule_kmap(k);
+  case RULE_KMAP_GET:
+    return kmap_access(k, 0);
+  case RULE_KMAP_SET:
+    return kmap_access(k, 1);
   }
   return NULL;
 }
@@ -1162,6 +1405,26 @@ static const Core *apply_known(Checker *c, const Term *whole, const Head *h, con
   uint32_t arity = known_arity(c, h);
   Call k;
   const Core *core;
+  /* bylaw-lang S1 U4a (restrict-lang S4): elim on Sum takes 4 arguments
+     and on Unit 3; under a Pi hint the motive fixes the count before eta. */
+  if (h->kind == HEAD_BUILTIN && h->builtin->rule == RULE_ELIM && argc >= 3u &&
+      hint != NULL && hint->kind == VAL_PI) {
+    const Value *pt = NULL;
+    const Value *dom = NULL;
+    uint32_t d = 0;
+    if (try_infer(c, args[0], &pt) != NULL) {
+      Diag saved = *c->m->diag;
+      dom = motive_domain(c, pt, &d);
+      *c->m->diag = saved;
+    }
+    if (dom == NULL)
+      dom = elim_domain(c, args, argc);
+    /* A bare motive can acquire its domain from the scrutinee after eta. */
+    if (dom == NULL)
+      return eta(c, whole, hint, type);
+    if (val_is(dom, OP_SUM))
+      arity = 4u;
+  }
   if (argc < arity && hint != NULL && hint->kind == VAL_PI)
     return eta(c, whole, hint, type);
   if (argc < arity)
@@ -1262,6 +1525,9 @@ static const Core *elab_inner(Checker *c, const Term *t, const Value *hint, cons
   case TERM_NAT:
     *type = nat_type(c);
     return finish(c, core_leaf(c, CORE_NAT, t->nat), hint, type);
+  case TERM_WORD:
+    *type = tyop(c, t->nat == WORD_ADDR ? OP_ADDR : OP_U256, 0, NULL, NULL, NULL);
+    return finish(c, core_word(c, t->nat, t->word), hint, type);
   case TERM_LAM:
     return hint != NULL ? check_lam(c, t, hint, type) : infer_lam(c, t, type);
   case TERM_PI:
@@ -1374,6 +1640,64 @@ static int check_ctor(Checker *c, uint32_t fam, const Ctor *ctor) {
   return 1;
 }
 
+/* An ABI word type: Nat, Flag, U256 or Addr (U3). */
+static int word_type(const Value *v) {
+  return v != NULL && v->kind == VAL_OP && (v->op == OP_NAT || v->op == OP_FLAG || v->op == OP_U256 || v->op == OP_ADDR);
+}
+
+/* An event (U3, from restrict-lang K4a1): a constructor of Out with fields
+   of the ABI word types. The field names are local to the event. */
+static int check_event(Checker *c, uint32_t fam, const Decl *d) {
+  Machine *m = c->m;
+  const Ctor *ctor = &d->ctors[0];
+  FieldInfo *fields = arena_alloc(m->arena, (ctor->field_count + 1u) * sizeof *fields);
+  CtorInfo *ci = &m->ctors[m->ctor_count];
+  size_t j;
+  m->def = d->name;
+  if (fields == NULL)
+    return FAIL(c, "OOM", "out of memory");
+  if (!name_free(c, d->name))
+    return 0;
+  if (ctor->field_count > ENTRY_PARAMS_MAX)
+    return FAIL(c, "REFUSE_EVENT", "the event %s has %u fields, the limit is %u", d->name, (unsigned)ctor->field_count, ENTRY_PARAMS_MAX);
+  for (j = 0; j < ctor->field_count; j++) {
+    uint64_t level = 0;
+    size_t k;
+    const Core *t = check_type(c, ctor->fields[j].type, &level);
+    const Value *v = t == NULL ? NULL : here(c, t);
+    if (v == NULL)
+      return 0;
+    if (!word_type(v))
+      return FAIL(c, "REFUSE_EVENT", "the event field %s must have an ABI word type: Nat, Flag, U256 or Addr, found %s", ctor->fields[j].name, show(c, v));
+    for (k = 0; k < j; k++)
+      if (strcmp(ctor->fields[j].name, ctor->fields[k].name) == 0)
+        return FAIL(c, "REFUSE_EVENT", "%s is already a field of the event %s", ctor->fields[j].name, d->name);
+    fields[j].name = ctor->fields[j].name;
+    fields[j].type = t;
+    fields[j].recursive = 0;
+  }
+  ci->name = d->name;
+  ci->family = fam;
+  ci->fields = fields;
+  ci->field_count = (uint32_t)ctor->field_count;
+  m->ctor_count++;
+  m->families[fam].ctor_count++;
+  return 1;
+}
+
+/* The events of the program join the family Out of the domain, in the order
+   of the program (U3). Thus a definition can use an event that the program
+   declares after it. */
+static int check_events(Checker *c, uint32_t fam) {
+  const char *def = c->m->def;
+  size_t i;
+  for (i = 0; i < c->decls->count; i++)
+    if (c->decls->items[i].is_event && !check_event(c, fam, &c->decls->items[i]))
+      return 0;
+  c->m->def = def;
+  return 1;
+}
+
 /* A family is in scope in its own fields, so a field can be recursive. */
 static int check_family(Checker *c, const Decl *d) {
   Machine *m = c->m;
@@ -1400,7 +1724,7 @@ static int check_family(Checker *c, const Decl *d) {
     if (!check_ctor(c, fam, &d->ctors[i]))
       return 0;
   }
-  return 1;
+  return d->origin != ORIGIN_PROGRAM && strcmp(d->name, "Out") == 0 ? check_events(c, fam) : 1;
 }
 
 static int check_def(Checker *c, const Decl *d) {
@@ -1421,7 +1745,223 @@ static int check_def(Checker *c, const Decl *d) {
   return 1;
 }
 
+/* A first-order type (U3, from restrict-lang K3a): an ABI word type, or
+   Option, Prod or List of first-order types. */
+static int first_order(const Value *t) {
+  uint32_t i;
+  if (word_type(t))
+    return 1;
+  if (t == NULL || t->kind != VAL_OP || (t->op != OP_OPTION && t->op != OP_PROD && t->op != OP_LIST))
+    return 0;
+  for (i = 0; i < t->argc; i++)
+    if (!first_order(t->args[i]))
+      return 0;
+  return 1;
+}
+
+/* The state of a program (U3, from restrict-lang K3a): one family State with
+   no parameters and one constructor whose fields have first-order types or
+   a Map K V. The field types are read again in their own scope. */
+static int check_state(Checker *c, const Decl *d) {
+  Machine *m = c->m;
+  const CtorInfo *ci;
+  uint32_t i;
+  for (i = 0; i < m->family_count; i++)
+    if (strcmp(m->families[i].name, "State") == 0)
+      return FAIL(c, "REFUSE_STATE", "a program can declare one state only");
+  if (strcmp(d->name, "State") != 0)
+    return FAIL(c, "REFUSE_STATE", "the state type must have the name State, found %s", d->name);
+  if (d->param_count != 0u || d->ctor_count != 1u)
+    return FAIL(c, "REFUSE_STATE", "the state must have no parameters and one constructor");
+  if (!name_free(c, d->name) || !check_family(c, d))
+    return 0;
+  ci = &m->ctors[m->families[m->family_count - 1u].first_ctor];
+  c->scope = NULL;
+  c->env = NULL;
+  c->level = 0;
+  for (i = 0; i < ci->field_count; i++) {
+    const Value *t = ci->fields[i].recursive ? NULL : here(c, ci->fields[i].type);
+    if (t == NULL || (!first_order(t) && !(t->kind == VAL_OP && t->op == OP_KMAP)))
+      return FAIL(c, "REFUSE_STATE", "the state field %s must have a first-order type: Nat, Flag, U256, Addr, Option, Prod or List of them, or a Map K V", ci->fields[i].name);
+    if (!push(c, ci->fields[i].name, t))
+      return 0;
+  }
+  return 1;
+}
+
+/* The text of the declarations of a rules form (restrict-lang S4): a
+   two-pass appender. With TEXT NULL it only measures; then it writes into
+   CAP bytes. */
+typedef struct {
+  char *text;
+  size_t len;
+  size_t cap;
+} Text;
+
+static void text_add(Text *t, const char *format, ...) {
+  va_list ap;
+  int n;
+  va_start(ap, format);
+  n = vsnprintf(t->text == NULL ? NULL : t->text + t->len, t->text == NULL ? 0u : t->cap - t->len, format, ap);
+  va_end(ap);
+  t->len += n > 0 ? (size_t)n : 0u;
+}
+
+/* The number of helper definitions of a rules form (PLAN section 13). */
+#define RULES_HELPERS 10u
+
+/* The helpers of a rules form: `$` is the name of the form. R.B and R.lift
+   lift a Flag test to Sum Unit Unit, R.no gives the disjointness by
+   transport, R.decide decides R.Holds, R.both decides a product and R.bitOf
+   takes the first bit of a Dec term. bylaw writes Eq in place of Path,
+   transport in place of transp and either in place of the large elim of
+   R.Code. R.decide uses the dependent elim of U4a (Q-S1-10 (a)). */
+static const char RULES_HELPER_TEXT[] =
+  "def $.B : Type 0 := Sum Unit Unit\n"
+  "def $.yes : $.B := inl unit\n"
+  "def $.lift : Flag -> $.B := fun (.b : Flag) => flagIf .b (inl unit) (inr unit)\n"
+  "def $.Holds : $.B -> Type 0 := fun (.x : $.B) => Eq $.B .x $.yes\n"
+  "def $.Dec : Type 0 -> Type 0 := fun (.P : Type 0) => Sum .P (.P -> Empty)\n"
+  "def $.Code : $.B -> Type 0 := fun (.x : $.B) => either (fun (.u : Unit) => Empty) (fun (.u : Unit) => Unit) .x\n"
+  "def $.no : (.u : Unit) -> Eq $.B (inr .u) $.yes -> Empty :=\n"
+  "  fun (.u : Unit) (.p : Eq $.B (inr .u) $.yes) => transport $.Code .p unit\n"
+  "def $.decide : (.x : $.B) -> $.Dec ($.Holds .x) :=\n"
+  "  fun (.x : $.B) => elim (fun (.y : $.B) => $.Dec ($.Holds .y))\n"
+  "    (fun (.u : Unit) => elim (fun (.v : Unit) => $.Dec ($.Holds (inl .v))) (inl refl) .u)\n"
+  "    (fun (.u : Unit) => inr ($.no .u)) .x\n"
+  "def $.both : (.P : Type 0) -> (.Q : Type 0) -> $.Dec .P -> $.Dec .Q -> $.Dec (Prod .P .Q) :=\n"
+  "  fun (.P : Type 0) (.Q : Type 0) (.dp : $.Dec .P) (.dq : $.Dec .Q) =>\n"
+  "    either (fun (.p : .P) => either (fun (.q : .Q) => inl (pair .p .q)) (fun (.nq : .Q -> Empty) => inr (fun (.r : Prod .P .Q) => .nq (second .r))) .dq)\n"
+  "      (fun (.np : .P -> Empty) => inr (fun (.r : Prod .P .Q) => .np (first .r))) .dp\n"
+  "def $.bitOf : (.P : Type 0) -> $.Dec .P -> Flag :=\n"
+  "  fun (.P : Type 0) (.d : $.Dec .P) => either (fun (.p : .P) => flagYes) (fun (.q : .P -> Empty) => flagNo) .d\n";
+
+/* Append TEMPLATE with each `$` replaced by the name RN. */
+static void text_named(Text *t, const char *rn, const char *template) {
+  const char *p = template;
+  const char *q;
+  while ((q = strchr(p, '$')) != NULL) {
+    text_add(t, "%.*s%s", (int)(q - p), p, rn);
+    p = q + 1;
+  }
+  text_add(t, "%s", p);
+}
+
+/* The product of the rules of D from rule I on, at .s .e .m, right nested. */
+static void rules_prod(Text *t, const Decl *d, size_t i) {
+  size_t j;
+  for (j = i; j + 1u < d->ctor_count; j++)
+    text_add(t, "Prod (%s.rule.%s.holds .s .e .m) (", d->name, d->ctors[j].name);
+  text_add(t, "%s.rule.%s.holds .s .e .m", d->name, d->ctors[d->ctor_count - 1u].name);
+  for (j = i; j + 1u < d->ctor_count; j++)
+    text_add(t, ")");
+}
+
+/* The dec term of the product from rule I on: R.both, right nested. */
+static void rules_dec(Text *t, const Decl *d, size_t i) {
+  const char *rn = d->name;
+  size_t j;
+  for (j = i; j + 1u < d->ctor_count; j++) {
+    text_add(t, "%s.both (%s.rule.%s.holds .s .e .m) (", rn, rn, d->ctors[j].name);
+    rules_prod(t, d, j + 1u);
+    text_add(t, ") (%s.rule.%s.dec .s .e .m) (", rn, d->ctors[j].name);
+  }
+  text_add(t, "%s.rule.%s.dec .s .e .m", rn, d->ctors[d->ctor_count - 1u].name);
+  for (j = i; j + 1u < d->ctor_count; j++)
+    text_add(t, ")");
+}
+
+/* The bit of the rules of D: the Flag tests in a right-nested flagIf, with
+   no either over a Dec, so K4c lowers it (restrict-lang S7, Q-S7-2 (a)). */
+static void rules_bit(Text *t, const Decl *d) {
+  size_t j;
+  for (j = 0; j + 1u < d->ctor_count; j++)
+    text_add(t, "flagIf (%s .s .e .m) (", d->ctors[j].name);
+  text_add(t, "%s .s .e .m", d->ctors[d->ctor_count - 1u].name);
+  for (j = 0; j + 1u < d->ctor_count; j++)
+    text_add(t, ") flagNo");
+}
+
+/* The elaboration of `rules R S M T := r1 | ... | rk` (restrict-lang S4,
+   PLAN section 13): the helpers, then for each rule R.rule.ri.holds and
+   R.rule.ri.dec, then the product R, its dec term R.dec, the bit R.bit (the
+   flagIf of the tests; the L1 rows tie it to the first bit of R.dec, S7)
+   and the view canTransfer. The per-rule names
+   cannot collide with helpers, even when ri is a qualified name.
+   Generated binders start with `.`, so they never capture a user name. */
+static void rules_text(Text *t, const Decl *d) {
+  const char *rn = d->name;
+  const char *sn = d->params[0].name;
+  const char *mn = d->params[1].name;
+  const char *tn = d->params[2].name;
+  size_t i;
+  text_named(t, rn, RULES_HELPER_TEXT);
+  for (i = 0; i < d->ctor_count; i++) {
+    const char *r = d->ctors[i].name;
+    text_add(t, "def %s.rule.%s.holds : %s -> Env -> %s -> Type 0 := fun (.s : %s) (.e : Env) (.m : %s) => %s.Holds (%s.lift (%s .s .e .m))\n", rn, r, sn, mn, sn, mn, rn, rn, r);
+    text_add(t, "def %s.rule.%s.dec : (.s : %s) -> (.e : Env) -> (.m : %s) -> %s.Dec (%s.rule.%s.holds .s .e .m) :=\n  fun (.s : %s) (.e : Env) (.m : %s) => %s.decide (%s.lift (%s .s .e .m))\n", rn, r, sn, mn, rn, rn, r, sn, mn, rn, rn, r);
+  }
+  text_add(t, "def %s : %s -> Env -> %s -> Type 0 := fun (.s : %s) (.e : Env) (.m : %s) => ", rn, sn, mn, sn, mn);
+  rules_prod(t, d, 0u);
+  text_add(t, "\ndef %s.dec : (.s : %s) -> (.e : Env) -> (.m : %s) -> %s.Dec (%s .s .e .m) :=\n  fun (.s : %s) (.e : Env) (.m : %s) => ", rn, sn, mn, rn, rn, sn, mn);
+  rules_dec(t, d, 0u);
+  text_add(t, "\ndef %s.bit : %s -> Env -> %s -> Flag := fun (.s : %s) (.e : Env) (.m : %s) => ", rn, sn, mn, sn, mn);
+  rules_bit(t, d);
+  text_add(t, "\n");
+  text_add(t, "def canTransfer : (env : Env) -> (s : %s) -> (f t : Addr) -> (x : U256) -> Flag :=\n  fun (.env : Env) (.s : %s) (.f : Addr) (.t : Addr) (.x : U256) => %s.bit .s .env (%s .f .t .x)\n", sn, sn, rn, tn);
+}
+
+/* A declaration that a rules form elaborates to: a fresh context (the
+   resets of check_program), then rule R4 on its name (check_def does not
+   check it). */
+static int check_generated(Checker *c, const Decl *d) {
+  c->scope = NULL;
+  c->env = NULL;
+  c->level = 0;
+  c->depth = 0;
+  c->self = NO_FAMILY;
+  c->m->def = d->name;
+  if (!name_free(c, d->name))
+    return 0;
+  return d->kind == DECL_FAMILY ? check_family(c, d) : check_def(c, d);
+}
+
+/* The rules form (restrict-lang S4, Q-S4-1 (a)): a kit form. The generated
+   text is lexed with `.` as a name character, parsed as program text and
+   checked declaration by declaration. A rule that is not a test of type
+   S -> Env -> M -> Flag fails in R.rule.ri.holds (TYPE_MISMATCH, O5). */
+static int check_rules(Checker *c, const Decl *d) {
+  Machine *m = c->m;
+  size_t size = strlen(d->name) + 7u;
+  char *source;
+  Text t = {NULL, 0, 0};
+  TokenList toks = {0};
+  DeclList list = {NULL, 0, 0};
+  size_t i;
+  source = arena_alloc(m->arena, size);
+  if (source == NULL)
+    return FAIL(c, "OOM", "out of memory");
+  snprintf(source, size, "rules %s", d->name);
+  rules_text(&t, d);
+  t.cap = t.len + 1u;
+  t.len = 0;
+  t.text = arena_alloc(m->arena, t.cap);
+  if (t.text == NULL)
+    return FAIL(c, "OOM", "out of memory");
+  rules_text(&t, d);
+  if (!lex_internal(m->arena, source, t.text, t.len, &toks, m->diag) || !parse_source(m->arena, source, ORIGIN_PROGRAM, &toks, &list, m->diag))
+    return 0;
+  for (i = 0; i < list.count; i++)
+    if (!check_generated(c, &list.items[i]))
+      return 0;
+  return 1;
+}
+
 static int check_decl(Checker *c, const Decl *d) {
+  if (d->is_event)
+    return 1;
+  if (d->is_state)
+    return check_state(c, d);
   if (d->kind == DECL_FAMILY && d->origin == ORIGIN_PROGRAM)
     return FAIL(c, "REFUSE_DATA", "a program cannot declare a family (rule R1); only domain/domain.lang can");
   if (d->kind == DECL_AXIOM)
@@ -1430,26 +1970,40 @@ static int check_decl(Checker *c, const Decl *d) {
     return FAIL(c, "REFUSE_REC", "def rec is refused (rule R3); use fold or unfold");
   if (!name_free(c, d->name))
     return 0;
-  return d->kind == DECL_FAMILY ? check_family(c, d) : check_def(c, d);
+  switch (d->kind) {
+  case DECL_FAMILY:
+    return check_family(c, d);
+  case DECL_RULES:
+    return check_rules(c, d);
+  case DECL_DEF:
+  case DECL_AXIOM:
+    break;
+  }
+  return check_def(c, d);
 }
 
 int check_program(Arena *arena, const DeclList *decls, Machine *m, Diag *diag) {
   Checker c;
   size_t ctors = 0;
+  size_t extra = 0;
   size_t i;
   memset(m, 0, sizeof *m);
   m->arena = arena;
   m->diag = diag;
   m->fuel = EVAL_FUEL_STEPS;
-  for (i = 0; i < decls->count; i++)
+  /* A rules form with K rules elaborates to RULES_HELPERS + 2K + 4
+     definitions (restrict-lang S4). */
+  for (i = 0; i < decls->count; i++) {
     ctors += decls->items[i].ctor_count;
-  m->defs = arena_alloc(arena, (decls->count + 1u) * sizeof *m->defs);
-  m->families = arena_alloc(arena, (decls->count + 1u) * sizeof *m->families);
+    extra += decls->items[i].kind == DECL_RULES ? RULES_HELPERS + 2u * decls->items[i].ctor_count + 4u : 0u;
+  }
+  m->defs = arena_alloc(arena, (decls->count + extra + 1u) * sizeof *m->defs);
+  m->families = arena_alloc(arena, (decls->count + extra + 1u) * sizeof *m->families);
   m->ctors = arena_alloc(arena, (ctors + 1u) * sizeof *m->ctors);
   if (m->defs == NULL || m->families == NULL || m->ctors == NULL)
     return diag_fail(diag, "OOM", NULL, "out of memory");
-  m->def_cap = (uint32_t)decls->count;
-  m->family_cap = (uint32_t)decls->count;
+  m->def_cap = (uint32_t)(decls->count + extra);
+  m->family_cap = (uint32_t)(decls->count + extra);
   m->ctor_cap = (uint32_t)ctors;
   memset(&c, 0, sizeof c);
   c.m = m;
@@ -1523,6 +2077,7 @@ static int print_result(Machine *m, const char *name, const Value *v, FILE *out,
       return 0;
     }
     break;
+  case VAL_WORD:
   case VAL_UNIV:
   case VAL_LAM:
   case VAL_PI:

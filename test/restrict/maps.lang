@@ -1,0 +1,17 @@
+-- S1 U2 maps (restrict-lang a0f4784): Map K V, mapEmpty, mapGet, mapSet.
+def m0 : Map Nat Nat := mapEmpty
+def m1 : Map Nat Nat := mapSet (mapSet m0 3 4) 1 2
+def m2 : Map Nat Nat := mapSet (mapSet m0 1 2) 3 4
+def gMiss : Nat := mapGet m1 7
+def gHit : Nat := mapGet m1 3
+def mZero : Map Nat Nat := mapSet m1 3 0
+def aMap : Map Addr U256 := mapSet mapEmpty 0x00000000000000000000000000000000000000bb 7u
+def fm : Map Nat Flag := mapSet (mapSet mapEmpty 2 flagYes) 2 flagNo
+def lawOrder : Eq (Map Nat Nat) m1 m2 := refl
+def lawZero : Eq (Map Nat Nat) mZero (mapSet m0 1 2) := refl
+def lawLast : Eq (Map Nat Nat) (mapSet (mapSet m1 1 9) 1 5) (mapSet m1 1 5) := refl
+def lawGetSet : Eq Nat (mapGet (mapSet m1 8 6) 8) 6 := refl
+def lawGetOther : Eq Nat (mapGet (mapSet m1 8 6) 3) (mapGet m1 3) := refl
+def lawHit : Eq Nat (mapGet m1 3) 4 := refl
+def lawFlagMiss : Eq Flag (mapGet fm 2) flagNo := refl
+def lawAddrMiss : Eq U256 (mapGet aMap 0x00000000000000000000000000000000000000aa) 0u := refl

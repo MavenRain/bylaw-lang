@@ -1,0 +1,38 @@
+-- S1 U6 BN254 G1 (restrict-lang a0f4784 examples/bn254.lang; addF and mulF from test/check/base-ecadd.lang, base-ecmul.lang).
+-- The restrict base-ec rows are REFUSE_KIT there; bylaw has no kit span, so they check.
+-- A coordinate at or above p, or a point not on the curve, traps.
+def addF : Prod U256 U256 -> Prod U256 U256 -> Prod U256 U256 := fun (a b : Prod U256 U256) => ecAdd a b
+def mulF : Prod U256 U256 -> U256 -> Prod U256 U256 := fun (a : Prod U256 U256) (k : U256) => ecMul a k
+
+def p : U256 := 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47u
+def pMinusTwo : U256 := 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd45u
+def pPlusTwo : U256 := 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd49u
+def r : U256 := 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001u
+def rMinusOne : U256 := 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000u
+
+def oneG : Prod U256 U256 := ecMul (pair 1u 2u) 1u
+def twoG : Prod U256 U256 := ecMul (pair 1u 2u) 2u
+def threeG : Prod U256 U256 := ecMul (pair 1u 2u) 3u
+def rMinusOneG : Prod U256 U256 := ecMul (pair 1u 2u) rMinusOne
+
+-- r is the order of G1, so r G is the point at infinity, (0, 0).
+def rG : Prod U256 U256 := ecMul (pair 1u 2u) r
+
+-- (1, p minus 2) is the negation of G, so the sum is the point at infinity.
+def negSum : Prod U256 U256 := ecAdd (pair 1u 2u) (pair 1u pMinusTwo)
+
+-- Each trap row is an entry (Nat -> Flag, as eqTrap in words.lang), so `langc eval` gives the EVAL_OVERFLOW line.
+-- (1, 1) is not on the curve.
+def addBad : Nat -> Flag := fun (n : Nat) => u256Eq (first (ecAdd (pair 1u 1u) (pair 1u (toU256 n)))) 0u
+def mulBad : Nat -> Flag := fun (n : Nat) => u256Eq (first (ecMul (pair 1u 1u) (toU256 n))) 0u
+
+-- A coordinate p traps. p + 2 is 2 modulo p, so (1, p + 2) is G after a reduction: it traps all the same.
+def coordP : Nat -> Flag := fun (n : Nat) => u256Eq (first (ecAdd (pair p 2u) (pair 1u (toU256 n)))) 0u
+def coordBig : Nat -> Flag := fun (n : Nat) => u256Eq (first (ecMul (pair 1u pPlusTwo) (toU256 n))) 0u
+
+-- bylaw refl rows: the add law against the mul rows, and the point at infinity.
+def addDouble : Eq (Prod U256 U256) (ecAdd (pair 1u 2u) (pair 1u 2u)) (ecMul (pair 1u 2u) 2u) := refl
+def addThree : Eq (Prod U256 U256) (ecAdd (ecMul (pair 1u 2u) 2u) (pair 1u 2u)) (ecMul (pair 1u 2u) 3u) := refl
+def addZero : Eq (Prod U256 U256) (ecAdd (pair 0u 0u) (pair 1u 2u)) (pair 1u 2u) := refl
+def orderR : Eq (Prod U256 U256) (ecMul (pair 1u 2u) r) (pair 0u 0u) := refl
+def viaF : Eq (Prod U256 U256) (mulF (addF (pair 1u 2u) (pair 1u 2u)) 2u) (ecMul (pair 1u 2u) 4u) := refl

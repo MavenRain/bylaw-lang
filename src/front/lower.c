@@ -576,6 +576,21 @@ static int closure(Low *l) {
   return diag_fail(l->m->diag, "REFUSE_RUNTIME_CLOSURE", l->m->def, "a function value must exist at run time (HOST-LIMIT)");
 }
 
+/* bylaw-lang S1 U1: words have no Wasm lowering yet (Q-S1-8: four i64 limbs, a later unit). */
+static int word_refused(Low *l) {
+  return diag_fail(l->m->diag, "REFUSE_WORD", l->m->def, "a U256 or Addr value must exist at run time; words have no Wasm lowering yet (HOST-LIMIT)");
+}
+
+/* bylaw-lang S1 U2: maps have no Wasm lowering yet (restrict-lang lowers them to EVM storage). */
+static int map_refused(Low *l) {
+  return diag_fail(l->m->diag, "REFUSE_MAP", l->m->def, "a Map value must exist at run time; maps have no Wasm lowering yet (HOST-LIMIT)");
+}
+
+/* bylaw-lang S1 U4a: a stuck elim has no Wasm lowering yet; either and option lower. */
+static int elim_refused(Low *l) {
+  return diag_fail(l->m->diag, "REFUSE_ELIM", l->m->def, "an elim on a run-time value has no Wasm lowering yet; use either (HOST-LIMIT)");
+}
+
 /* 1 when the evaluator gave a value, else 0 after a diagnostic. */
 static int got(Low *l, const Value *v) {
   return v != NULL ? 1 : (l->m->diag->set ? 0 : internal(l, "a missing value"));
@@ -638,6 +653,9 @@ static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_UNIT_VAL:
   case OP_FLAG_NO:
   case OP_REFL:
+  case OP_U256:
+  case OP_ADDR:
+  case OP_KMAP:
     return give(l, out, 0, 0);
   case OP_FLAG_YES:
     return give(l, out, 1, 0);
@@ -660,6 +678,7 @@ static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_SECOND:
   case OP_EITHER:
   case OP_OPTION_ELIM:
+  case OP_ELIM:
   case OP_PURE:
   case OP_MAP:
   case OP_BIND:
@@ -682,6 +701,26 @@ static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_FLAG_IF:
   case OP_PROJ:
     return closure(l);
+  case OP_U256_ADD:
+  case OP_U256_SUB:
+  case OP_U256_LE:
+  case OP_U256_EQ:
+  case OP_TO_U256:
+  case OP_TO_NAT:
+  case OP_ADDR_EQ:
+  case OP_ADDR_TO_U256:
+  case OP_HASH:
+  case OP_EC_ADD:
+  case OP_EC_MUL:
+  case OP_ZK_KEY:
+  case OP_ZK_HP_AT:
+  case OP_ZK_SIGN_AT:
+  case OP_ZK_VERIFY_AT:
+    return word_refused(l);
+  case OP_KMAP_OF:
+  case OP_KMAP_GET:
+  case OP_KMAP_SET:
+    return map_refused(l);
   }
   return internal(l, "an unknown operation");
 }
@@ -1183,6 +1222,9 @@ static int lower_stuck(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_UNIT_VAL:
   case OP_FLAG_YES:
   case OP_FLAG_NO:
+  case OP_U256:
+  case OP_ADDR:
+  case OP_KMAP:
   case OP_PAIR:
   case OP_INL:
   case OP_INR:
@@ -1207,6 +1249,8 @@ static int lower_stuck(Low *l, Buf *b, const Value *v, Operand *out) {
     return two_cases(l, b, v, 1, out);
   case OP_OPTION_ELIM:
     return two_cases(l, b, v, 0, out);
+  case OP_ELIM:
+    return elim_refused(l);
   case OP_MAP:
     return v->inst == CARRIER_LIST ? list_map(l, b, v, out) : carrier_map(l, b, v, out);
   case OP_BIND:
@@ -1241,6 +1285,26 @@ static int lower_stuck(Low *l, Buf *b, const Value *v, Operand *out) {
     return nat_bin(l, b, v, IR_OP_LE, 0, out);
   case OP_FLAG_IF:
     return flag_if(l, b, v, out);
+  case OP_U256_ADD:
+  case OP_U256_SUB:
+  case OP_U256_LE:
+  case OP_U256_EQ:
+  case OP_TO_U256:
+  case OP_TO_NAT:
+  case OP_ADDR_EQ:
+  case OP_ADDR_TO_U256:
+  case OP_HASH:
+  case OP_EC_ADD:
+  case OP_EC_MUL:
+  case OP_ZK_KEY:
+  case OP_ZK_HP_AT:
+  case OP_ZK_SIGN_AT:
+  case OP_ZK_VERIFY_AT:
+    return word_refused(l);
+  case OP_KMAP_OF:
+  case OP_KMAP_GET:
+  case OP_KMAP_SET:
+    return map_refused(l);
   }
   return internal(l, "an unknown operation");
 }
@@ -1251,6 +1315,8 @@ static int lower_value(Low *l, Buf *b, const Value *v, Operand *out) {
     return give(l, out, v->nat, 0);
   case VAL_TRAP:
     return give(l, out, 0, 1);
+  case VAL_WORD:
+    return word_refused(l);
   case VAL_UNIV:
   case VAL_PI:
   case VAL_SIGMA:

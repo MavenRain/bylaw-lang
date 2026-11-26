@@ -1,0 +1,2 @@
+-- S1 U6: ecAdd needs two points; 3u is a word.
+def f : Prod U256 U256 := ecAdd (pair 1u 2u) 3u

@@ -69,6 +69,47 @@ while IFS= read -r line; do
 done <test/eval/expect.txt
 echo "evals: $evals checked"
 
+# The restrict-lang verdicts (docs/PLAN.md section 7, S1 units). The copies stay
+# out of examples/, because the IR and Wasm loops refuse them before S3. Each
+# test/restrict/*.lang must check, and each line of test/restrict/expect.txt is
+# `FILE NAME [ARGS] => OUTPUT` as in test/eval/expect.txt.
+rcount=0
+for prog in test/restrict/*.lang; do
+  [ -e "$prog" ] || continue
+  out=$(build/langc check "$prog" 2>&1) || true
+  rcount=$((rcount + 1))
+  if [ "$out" != "ok" ]; then
+    echo "FAIL $prog: $out"
+    fail=$((fail + 1))
+  fi
+done
+echo "restrict: $rcount checked"
+revals=0
+while IFS= read -r line; do
+  want=${line#* => }
+  set -- ${line%% => *}
+  file=$1
+  name=$2
+  shift 2
+  status=0
+  got=$(build/langc eval "test/restrict/$file.lang" "$name" "$@" 2>"$tmp/err") || status=$?
+  first=$(head -n 1 "$tmp/err")
+  diag_ok=0
+  if [ "$want" = "trap" ]; then
+    case "$first" in
+      "langc: EVAL_OVERFLOW: $name: "*) diag_ok=1 ;;
+    esac
+  elif [ ! -s "$tmp/err" ]; then
+    diag_ok=1
+  fi
+  revals=$((revals + 1))
+  if [ "$status" -ne 0 ] || [ "$got" != "$want" ] || [ "$diag_ok" -ne 1 ]; then
+    echo "FAIL restrict eval $file $name: want $want, got exit $status: $got $first"
+    fail=$((fail + 1))
+  fi
+done <test/restrict/expect.txt
+echo "restrict evals: $revals checked"
+
 # eval_refused STATUS CODE NAME [ARGS]: `langc eval examples/entries.lang NAME
 # ARGS` must exit STATUS and print `langc: CODE: NAME: ...` on stderr.
 eval_refused() {

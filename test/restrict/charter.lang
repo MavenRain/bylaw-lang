@@ -1,0 +1,20 @@
+-- U8: the charter law of restrict-lang examples/charter.lang 79-95, trimmed.
+-- The restrict Charter is a higher inductive type: adopt takes a Ratified
+-- value (ratify c w), and adoptTwice is a path. The bylaw Charter (domain
+-- file) is a plain family, so c1 is adopt genesis rulesV1 in place of
+-- adopt genesis (ratify genesis rulesV1). The rows keep the restrict
+-- values; Eq replaces Path.
+def rulesV1 : Size := szS sz0
+def c1 : Charter := adopt genesis rulesV1
+def c2 : Charter := adopt c1 rulesV1
+def activeGenesis : Eq RuleSet (active genesis) rs0 := refl
+def activeOne : Eq RuleSet (active c1) rs1 := refl
+def activeTwice : Eq RuleSet (active c2) rs1 := refl
+def activeBack : Eq RuleSet (active (adopt c1 sz0)) rs0 := refl
+-- ruleOf on a larger id (a derivation: restrict has no such row).
+def ruleTwo : Eq RuleSet (ruleOf (szS rulesV1)) rs1 := refl
+-- The values for the eval rows.
+def aGenesis : RuleSet := active genesis
+def aOne : RuleSet := active c1
+def aTwice : RuleSet := active c2
+def aBack : RuleSet := active (adopt c1 sz0)

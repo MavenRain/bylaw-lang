@@ -1,0 +1,2 @@
+-- S1 U7: the ring of zkVerifyAt is a list of points, not of words.
+def bad : Flag := zkVerifyAt (cons 1u nil) 1u 2u (cons 1u nil)

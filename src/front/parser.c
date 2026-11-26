@@ -127,6 +127,7 @@ static int starts_atom(TokKind kind) {
   switch (kind) {
     case TOK_IDENT:
     case TOK_NAT:
+    case TOK_WORD:
     case TOK_LPAREN:
     case TOK_KW_TYPE:
     case TOK_KW_SIGMA:
@@ -144,6 +145,9 @@ static int starts_atom(TokKind kind) {
     case TOK_KW_FUN:
     case TOK_KW_FAMILY:
     case TOK_KW_AXIOM:
+    case TOK_KW_STATE:
+    case TOK_KW_EVENT:
+    case TOK_KW_RULES:
       return 0;
   }
   return 0;
@@ -277,6 +281,7 @@ static const Term *parse_leaf(Parser *p, TermKind kind) {
   Term *term = make_term(p, kind, tok->line, tok->col);
   if (term == NULL) return NULL;
   term->nat = tok->nat;
+  term->word = kind == TERM_WORD ? &tok->word : NULL;
   term->name = kind == TERM_VAR ? token_text(p, tok) : NULL;
   bump(p);
   return kind == TERM_VAR && term->name == NULL ? NULL : term;
@@ -287,6 +292,7 @@ static const Term *parse_atom(Parser *p) {
   switch (tok->kind) {
     case TOK_IDENT: return parse_leaf(p, TERM_VAR);
     case TOK_NAT: return parse_leaf(p, TERM_NAT);
+    case TOK_WORD: return parse_leaf(p, TERM_WORD);
     case TOK_LPAREN: return parse_paren(p);
     case TOK_KW_TYPE: return parse_universe(p);
     case TOK_KW_SIGMA: return parse_sigma(p);
@@ -303,6 +309,9 @@ static const Term *parse_atom(Parser *p) {
     case TOK_KW_FUN:
     case TOK_KW_FAMILY:
     case TOK_KW_AXIOM:
+    case TOK_KW_STATE:
+    case TOK_KW_EVENT:
+    case TOK_KW_RULES:
       break;
   }
   fail_at(p, tok, "a term");
@@ -416,19 +425,92 @@ static int parse_family(Parser *p, Decl *d) {
   return 1;
 }
 
+/* `event NAME group*` (U3, from restrict-lang K4a1): a family declaration
+   with one constructor, the event. The checker adds the constructor to the
+   family Out of the domain. */
+static int parse_event(Parser *p, Decl *d) {
+  size_t cap = 0;
+  Ctor *ctor;
+  bump(p);
+  d->kind = DECL_FAMILY;
+  d->type = NULL;
+  d->body = NULL;
+  d->params = NULL;
+  d->param_count = 0;
+  d->name = take_name(p, "an event name");
+  if (d->name == NULL) return 0;
+  p->def = d->name;
+  ctor = grow(p, NULL, 0, &cap, sizeof *ctor);
+  if (ctor == NULL) return 0;
+  ctor->name = d->name;
+  ctor->line = d->line;
+  ctor->col = d->col;
+  d->ctors = ctor;
+  d->ctor_count = 1u;
+  return parse_fields(p, &ctor->fields, &ctor->field_count);
+}
+
+/* `rules R S M T := r1 | ... | rk` (restrict-lang S4, Q-S4-1 (a)): names
+   only. The params hold the state type S, the move type M and the transfer
+   helper T, with no types. The constructors hold the rule names, with no
+   fields. The checker elaborates the form to text. */
+static int parse_rules(Parser *p, Decl *d) {
+  static const char *const WHAT[] = {"a state type name", "a move type name", "a transfer helper name"};
+  Field *names;
+  Ctor *ctors = NULL;
+  size_t cap = 0;
+  size_t count = 0;
+  size_t j;
+  bump(p);
+  d->kind = DECL_RULES;
+  d->name = take_name(p, "a rules name");
+  if (d->name == NULL) return 0;
+  p->def = d->name;
+  names = grow(p, NULL, 0, &cap, sizeof *names);
+  if (names == NULL) return 0;
+  for (j = 0; j < 3u; j++) {
+    names[j].line = cur(p)->line;
+    names[j].col = cur(p)->col;
+    names[j].name = take_name(p, WHAT[j]);
+    if (names[j].name == NULL) return 0;
+  }
+  d->params = names;
+  d->param_count = 3u;
+  if (!expect(p, TOK_DEFINE, "':='")) return 0;
+  cap = 0;
+  do {
+    ctors = grow(p, ctors, count, &cap, sizeof *ctors);
+    if (ctors == NULL) return 0;
+    ctors[count].line = cur(p)->line;
+    ctors[count].col = cur(p)->col;
+    ctors[count].name = take_name(p, "a rule name");
+    if (ctors[count].name == NULL) return 0;
+    count++;
+  } while (eat(p, TOK_BAR));
+  d->ctors = ctors;
+  d->ctor_count = count;
+  return 1;
+}
+
 static int parse_decl(Parser *p, Decl *d) {
   const Token *tok = cur(p);
   p->def = NULL;
   d->origin = p->origin;
   d->line = tok->line;
   d->col = tok->col;
+  d->is_state = tok->kind == TOK_KW_STATE;
+  d->is_event = tok->kind == TOK_KW_EVENT;
   switch (tok->kind) {
     case TOK_KW_DEF: return parse_def(p, d);
     case TOK_KW_AXIOM: return parse_axiom(p, d);
     case TOK_KW_FAMILY: return parse_family(p, d);
+    case TOK_KW_STATE: return parse_family(p, d);
+    case TOK_KW_EVENT: return parse_event(p, d);
+    case TOK_KW_RULES: return parse_rules(p, d);
     case TOK_EOF:
     case TOK_IDENT:
     case TOK_NAT:
+    case TOK_WORD:
     case TOK_LPAREN:
     case TOK_RPAREN:
     case TOK_COLON:
@@ -443,7 +525,7 @@ static int parse_decl(Parser *p, Decl *d) {
     case TOK_KW_SIGMA:
       break;
   }
-  return fail_at(p, tok, "'def', 'axiom' or 'family'");
+  return fail_at(p, tok, "'def', 'axiom', 'family', 'state', 'event' or 'rules'");
 }
 
 int parse_source(Arena *arena, const char *source, Origin origin, const TokenList *toks, DeclList *list, Diag *diag) {

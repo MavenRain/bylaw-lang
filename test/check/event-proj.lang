@@ -1,0 +1,4 @@
+-- An event field name is not a projection: movedTo is not in scope.
+event Moved (movedTo : Addr) (movedAmt : U256)
+def o0 : Out := Moved 0x00000000000000000000000000000000000000aa 2u
+def p : Addr := movedTo o0

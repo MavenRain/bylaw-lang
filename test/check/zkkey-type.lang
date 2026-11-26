@@ -1,0 +1,2 @@
+-- S1 U7: zkKey takes a Nat; 1u is a word.
+def bad : U256 := zkKey 1u

@@ -1,0 +1,9 @@
+-- S1 U5 hash (restrict-lang a0f4784): Keccak-256 of the 64 bytes of two words.
+-- restrict test/check/base-hash.lang is REFUSE_KIT there; bylaw has no kit span, so it checks.
+def f : U256 -> U256 -> U256 := hash
+-- restrict examples/precompile.lang hashZero: keccak256 of 64 zero bytes.
+def hashZero : U256 := hash 0u 0u
+def hashOneTwo : U256 := hash 1u 2u
+def zeroWord : Eq U256 (hash 0u 0u) 0xad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb5u := refl
+def ordered : Eq Flag (u256Eq (hash 1u 2u) (hash 2u 1u)) flagNo := refl
+def viaF : Eq U256 (f 1u 2u) (hash 1u 2u) := refl

@@ -20,6 +20,8 @@
 typedef enum {
   OP_NAT,
   OP_FLAG,
+  OP_U256,
+  OP_ADDR,
   OP_UNIT,
   OP_PROD,
   OP_SUM,
@@ -44,6 +46,9 @@ typedef enum {
   OP_SECOND,
   OP_EITHER,
   OP_OPTION_ELIM,
+  /* bylaw-lang S1 U4a (restrict-lang S4): elim P c1 .. cn x, the dependent
+     eliminator of Sum A B (n = 2) and Unit (n = 1); INST holds n. */
+  OP_ELIM,
   OP_PURE,
   OP_MAP,
   OP_BIND,
@@ -64,7 +69,28 @@ typedef enum {
   OP_NAT_EQ,
   OP_NAT_LE,
   OP_FLAG_IF,
-  OP_PROJ
+  OP_U256_ADD,
+  OP_U256_SUB,
+  OP_U256_LE,
+  OP_U256_EQ,
+  OP_TO_U256,
+  OP_TO_NAT, /* toNat x: the Nat of x; traps above 2^64 - 1 (restrict-lang S7, Q-S7-4 (a)) */
+  OP_ADDR_EQ,
+  OP_ADDR_TO_U256,
+  OP_HASH, /* hash x y: Keccak-256 of the 64 bytes of two words (restrict-lang S2, R16) */
+  OP_EC_ADD, /* ecAdd p q: the BN254 G1 sum (restrict-lang S8 B1) */
+  OP_EC_MUL, /* ecMul p k: k times the BN254 G1 point p (restrict-lang S8 B1) */
+  OP_ZK_KEY, /* zkKey i: the bLSAG test key hash(tag, i) mod r (restrict-lang S8 B2a) */
+  OP_ZK_HP_AT, /* zkHpAt P w: H_p(P) at the context w (restrict-lang S5, Q-S5-1 (a)) */
+  OP_ZK_SIGN_AT, /* zkSignAt ring x w m: a bLSAG with H_p at the context w */
+  OP_ZK_VERIFY_AT, /* zkVerifyAt ring w m sig: the verify of zkSignAt */
+  OP_PROJ,
+  /* Slice K4a0: Map K V, the map value (k0 v0 k1 v1 ... with the keys in
+     order and no zero value), mapGet V m k and mapSet V m k v. */
+  OP_KMAP,
+  OP_KMAP_OF,
+  OP_KMAP_GET,
+  OP_KMAP_SET
 } Op;
 
 /* The instance of pure, map, bind and filter (formers F5 and F8). */
@@ -78,6 +104,7 @@ typedef enum {
   CORE_VAR,    /* index: de Bruijn index */
   CORE_GLOBAL, /* index: definition number */
   CORE_NAT,    /* nat */
+  CORE_WORD,   /* word; nat is WORD_U256 or WORD_ADDR */
   CORE_TRAP,   /* an overflow; only quote writes it */
   CORE_UNIV,   /* Type nat */
   CORE_LAM,    /* fun name => b */
@@ -92,6 +119,7 @@ struct Core {
   CoreKind kind;
   uint32_t index;
   uint64_t nat;
+  const U256 *word; /* WORD: the limbs */
   Op op;
   /* OP_FAMILY, OP_FOLD_FAMILY: the family. OP_CTOR, OP_PROJ: the
      constructor. OP_PURE, OP_MAP, OP_BIND, OP_FILTER: the Carrier. */
@@ -106,6 +134,7 @@ struct Core {
 
 typedef enum {
   VAL_NAT,
+  VAL_WORD, /* nat is WORD_U256 or WORD_ADDR */
   VAL_TRAP,
   VAL_UNIV,
   VAL_LAM,
@@ -129,6 +158,7 @@ struct Env {
 struct Value {
   ValKind kind;
   uint64_t nat; /* NAT: the number. UNIV: the level. VAR: the level. */
+  const U256 *word; /* WORD: the limbs */
   Op op;        /* OP, STUCK */
   uint32_t inst;
   uint32_t field;
@@ -196,6 +226,7 @@ typedef struct {
 /* Each function returns NULL (or 0) after a diagnostic. A NULL input gives a
    NULL result, so a caller can test once at the end. */
 const Value *val_nat(Machine *m, uint64_t n);
+const Value *val_word(Machine *m, uint64_t sort, const U256 *word);
 const Value *val_var(Machine *m, uint32_t level);
 const Value *val_univ(Machine *m, uint64_t level);
 const Value *val_op(Machine *m, ValKind kind, Op op, uint32_t inst, uint32_t field, const Value *const *args, uint32_t argc);

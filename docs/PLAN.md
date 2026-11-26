@@ -38,6 +38,41 @@ surface, the agent surface, the slices and the open questions.
 - A1. The agent criteria of DESIGN.md (the request, "Finally ...") are
   deliverables. Section 6 places each one.
 
+USER answers to the S1 questions of section 8 (AskUserQuestion,
+2026-11-23, verbatim option labels):
+
+- Q-S1-1. "One form + obligation (Recommended)". (a): one form for each
+  operation; the checker discharges a no-overflow obligation, or the
+  program proves it; the fix hint names the missing bound.
+- Q-S1-2. "Wasm instructions (Recommended)". (a): one unit for each Wasm
+  instruction executed (the wasmtime fuel model).
+- Q-S1-3. "t > n / 2 (Recommended)". (a): the checker requires a strict
+  majority.
+- Q-S1-4. "Rule sets + params (Recommended)". (a): `amend` moves among
+  the rule sets and parameters in the artifact; new code needs a new
+  artifact whose chain extends the stored epoch.
+- Q-S1-5. "langc subcommands in C (Recommended)". (a): offline key
+  generation, signing and aggregation in C, tested with the RFC 9591
+  vectors.
+- Q-S1-6. "Native langc serve (Recommended)". (a): a native `langc serve`
+  that TinyCC builds. Prices, payee address and facilitator: pending USER
+  data.
+- Q-S1-7. "Account-wide FUNDING.yml (Recommended)". (a): until the USER
+  gives the entity, the contact and the channels, the account-wide
+  `MavenRain/.github/FUNDING.yml` applies and the repo has no
+  `funding.json`. Entity, contact and channels: pending USER data.
+- Q-S1-8. "Four i64 limbs (Recommended)". (a): `U256` is four i64 limbs
+  that the kit lowers.
+- Q-S1-9. "BN254 bLSAG in C (Recommended)". (a): keep the BN254 G1 bLSAG
+  of restrict-lang, in C.
+- Q-S1-10 (RULED 2026-11-25). "(a) Port restrict elim (Recommended)": the
+  generated `R.decide` of a `rules` form needs a dependent eliminator, and
+  bylaw has only `either` and `flagIf`. Port the dependent `elim` of
+  restrict-lang. U4 splits into U4a (`elim`) and U4b (the `rules` form,
+  dotted names, `Empty`, `R.Dec`).
+- S1 build tier. "Hand build (Recommended)": main-loop edits, as in S0.
+  This ruling covers S1 only.
+
 ## 2. The reading of R1 on the tcc-wasm kit
 
 The kit traps today. Each row is a current trap site and its planned
@@ -141,9 +176,73 @@ records `Broken`, as restrict-lang does (SPEC.md section 6).
 | S8 | `fmt`, `check --json`, `mcp`, `SKILL.md`, `AGENTS.md`, the README table, `docs/TOKENS.md` | `fmt` fixed point; MCP calls answer; the token table is reproducible |
 | S9 | Discovery and funding files, the OpenAPI description, the x402 endpoint, the registry entry | the 402 response carries the price; the files validate |
 
-## 8. Open questions (S1)
+### S1 units (hand build, USER ruling 2026-11-23)
 
-Each question has a recommended answer (a).
+The source is a read-only gap survey of 2026-11-23 (outside the repo:
+`bylaw-lang-work/s1/gap-survey.md`). These are readings, not rulings:
+
+- The restrict-lang verdicts are the check-ok runs of
+  `examples/mirror.lang` and `examples/restrict.lang` (their `Path ...
+  refl` rows) and the run scripts `test/run/mirror.script` and
+  `test/run/restrict.script`. `examples/restrictkit.lang`,
+  `test/restrict.sh` and `test/dao.sh` need the EVM or the DAO, so they
+  drop. `examples/charter.lang` needs `yn`, `passCon`, `regimeOf` and a
+  higher inductive type; a trimmed copy keeps only `active`.
+- Trimmed copies go below `test/restrict/`, with
+  `test/restrict/expect.txt`. They write `Eq` in place of `Path`.
+  `test/gate.sh` gets a check-ok loop and an eval loop for that directory
+  (copies of the loops for `examples/`). The copies stay out of
+  `examples/`, because the IR and Wasm loops refuse them before S3.
+- `bindToken` and `unbindToken` become amendments (section 5), so they
+  are not in S1. The trimmed mirror sets the bound token in the initial
+  state.
+- A run row becomes a nullary definition and an eval row. S1 has no `run`
+  verb.
+- Each unit adds its rows when they pass, so each gate stays EXIT 0. The
+  restrict copy splits in two: the rules part (U4) and the credential
+  part (U7).
+
+| Unit | Content | C lines (est.) | Rows that pass |
+|---|---|---|---|
+| U0 | `probe/CAPABILITY.md`; `SPEC.md` sections 2 to 8; the two gate loops for `test/restrict/` | 0 | none (loops only) |
+| U1 | Words: `U256` as four i64 limbs, `Addr`, the literals `Nu` and `0x` with 40 hex digits, add, sub, eq, le, `addrEq`, `addrToU256`, `toU256`, `toNat`, print | 500 | the word rows of the unit |
+| U2 | The keyed map `Map K V`: `mapEmpty`, `mapGet`, `mapSet`, `mapOf` | 350 | the map rows of the unit |
+| U3 | The `state` form; `Env` (`makeEnv`, `now`, `caller`, `self`); the `event` form and `Out`; the entry result `Option (Prod State (List Out))` | 450 | the mirror rows |
+| U4a | The dependent eliminator `elim` (Q-S1-10) | 200 | the `elim` rows of the unit |
+| U4b | The `rules` form, dotted names, `Empty`, `R.Dec` | 250 | the restrict rule and `canTransfer` rows |
+| U5 | `hash` (keccak-256 of words) | 200 | the hash rows of the unit |
+| U6 | BN254 Fp and G1 | 450 | the curve rows of the unit |
+| U7a | bLSAG; `zkKey`, `zkHpAt`, `zkSignAt`, `zkVerifyAt` | 450 | the `zk` rows of the unit |
+| U7b | `issue`, `register` and `isVerified` in `test/restrict/rules.lang` | 0 | the restrict credential rows |
+| U8 | A trimmed `Charter` in `domain/domain.lang`; `active` by `fold` | 0 (about 50 lines of .lang) | the `active` rows |
+
+S1 close (2026-11-25). U0 to U8 are DONE, each with a green gate. U7 is
+split in two: U7a (the C half: bLSAG, `zkKey`, `zkHpAt`, `zkSignAt` and
+`zkVerifyAt`) and U7b (the credential rows `issue`, `register` and
+`isVerified` in `test/restrict/rules.lang`). U8 puts `Size`, `RuleSet`,
+`ruleOf`, `Charter` and `active` in `domain/domain.lang`; the rows are in
+`test/restrict/charter.lang`. The USER ruled the open findings on
+2026-11-25:
+
+- Finding 9 (keep public): `ecAdd`, `ecMul`, `zkKey`, `zkHpAt`,
+  `zkSignAt` and `zkVerifyAt` stay public builtins (restrict-lang: kit
+  only).
+- Finding 12 (keep R4): an event field is a domain name, so a definition
+  cannot have the name of an event field. The restrict row `regClass` is
+  `regDaveClass` in `test/restrict/rules.lang`.
+- Carry to S2: (1) the `EVAL_OVERFLOW` text names Nat for the U256 and
+  curve traps; (2) the `REFUSE_NAME` text of an event says "domain
+  constructor"; (3) a `Flag` value prints `1`, restrict-lang prints
+  `flagYes`; (4) the text of `elim-motive-dom` follows the motive
+  domain; (6) `parse_rules` does not set `is_rec`; (7) `canTransfer` is
+  a fixed name; (8) the test `State` keeps `decided`, which SPEC.md
+  section 5 drops; (10) dead branches in the zk glue; (11) no
+  independent oracle for bLSAG.
+
+## 8. Open questions (S1, RULED 2026-11-23)
+
+Each question has a recommended answer (a). The USER ruled all nine on
+2026-11-23 and chose (a) for each. Section 1 holds the answers.
 
 - Q-S1-1. The arithmetic form. (a) One form for each operation, with a
   no-overflow obligation that the checker discharges or that the program
@@ -171,3 +270,6 @@ Each question has a recommended answer (a).
   u64, with bound obligations.
 - Q-S1-9. The credential curve. (a) Keep the BN254 G1 bLSAG of
   restrict-lang, in C. (b) Move to secp256k1 and share the FROST code.
+- Q-S1-10 (asked 2026-11-25, in U4). How `R.decide` decides a rule. (a)
+  Port the dependent `elim` of restrict-lang. (b) A new primitive
+  `decide : (f : Flag) -> Dec (Holds (lift f))`. (c) Defer `R.Dec`.

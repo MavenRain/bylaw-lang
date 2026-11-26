@@ -19,3 +19,31 @@ def redTotal : (items : List Item) -> Nat :=
   fun (items : List Item) => total (filter (fun (item : Item) => isRed (itemColor item)) items)
 def depth : (s : Stack) -> Nat :=
   fun (s : Stack) => fold 0 (fun (top : Nat) (rest : Nat) => natAdd rest 1) s
+
+-- The contract prelude (U3, from restrict-lang src/front/contract.c, slice
+-- K3a): the environment of an entry and the outputs of an entry. The events
+-- of a program join Out.
+family Env := makeEnv (now : Nat) (block : U256) (caller : Addr) (self : Addr)
+-- The empty family (restrict-lang S10 B1): one constructor and no base
+-- case, so no closed value. R.Dec of the rules form needs it (U4).
+family Empty := emptyLoop (emptyOf : Empty)
+family Out := pay (payToken : Addr) (payTo : Addr) (payAmount : U256)
+  | pull (pullToken : Addr) (pullFrom : Addr) (pullTo : Addr) (pullAmount : U256)
+  | emit (emitTag : Nat) (emitFields : List U256)
+
+-- The trimmed Charter (U8, docs/PLAN.md section 7). restrict-lang
+-- examples/charter.lang has a higher inductive Charter with a Ratified
+-- family and set paths; S1 keeps only the history and the fold `active`.
+-- A rule-set id is a Size (restrict-lang domain/domain.lang). ruleOf reads
+-- id 0 as rule set 0 and each id above 0 as rule set 1. Both are folds over
+-- a closed tree, so neither can trap (rule R1). A fold over a charter that
+-- exists only at run time refuses at compile time (REFUSE_RUNTIME_TREE).
+family Size := sz0 | szS (szPred : Size)
+def RuleSet : Type 0 := Sum Unit Unit
+def rs0 : RuleSet := inl unit
+def rs1 : RuleSet := inr unit
+def ruleOf : (w : Size) -> RuleSet :=
+  fun (w : Size) => fold rs0 (fun (ih : RuleSet) => rs1) w
+family Charter := genesis | adopt (adoptFrom : Charter) (adoptRules : Size)
+def active : (c : Charter) -> RuleSet :=
+  fun (c : Charter) => fold rs0 (fun (prev : RuleSet) (w : Size) => ruleOf w) c

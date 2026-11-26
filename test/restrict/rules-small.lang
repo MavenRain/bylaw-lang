@@ -1,0 +1,29 @@
+-- U4b (PLAN sec 7): the rules form (restrict-lang S4) on a small token.
+-- The form gives allowed.rule.ri.holds and .dec, allowed, allowed.dec,
+-- allowed.bit and the view canTransfer; R.decide uses the U4a elim.
+def Move : Type 0 := Prod Addr (Prod Addr U256)
+def transfer : Addr -> Addr -> U256 -> Move :=
+  fun (f : Addr) (t : Addr) (x : U256) => pair f (pair t x)
+state State := makeState (bal : Map Addr U256) (cap : U256)
+def notF : Flag -> Flag := fun (b : Flag) => flagIf b flagNo flagYes
+def small : State -> Env -> Move -> Flag :=
+  fun (s : State) (e : Env) (m : Move) => u256Le (second (second m)) (cap s)
+def notSelf : State -> Env -> Move -> Flag :=
+  fun (s : State) (e : Env) (m : Move) => notF (addrEq (first m) (first (second m)))
+rules allowed State Move transfer := small | notSelf
+def alice : Addr := 0x00000000000000000000000000000000000000aa
+def bob : Addr := 0x00000000000000000000000000000000000000bb
+def selfAddr : Addr := 0x00000000000000000000000000000000000000c0
+def e0 : Env := makeEnv 100 100u alice selfAddr
+def s0 : State := makeState mapEmpty 10u
+def okMove : Flag := canTransfer e0 s0 alice bob 5u
+def bigMove : Flag := canTransfer e0 s0 alice bob 11u
+def selfMove : Flag := canTransfer e0 s0 alice alice 5u
+def bitOk : Flag := allowed.bit s0 e0 (transfer alice bob 5u)
+def decOk : Flag := allowed.bitOf (allowed s0 e0 (transfer alice bob 5u)) (allowed.dec s0 e0 (transfer alice bob 5u))
+def decBig : Flag := allowed.bitOf (allowed s0 e0 (transfer alice bob 11u)) (allowed.dec s0 e0 (transfer alice bob 11u))
+def decSelf : Flag := allowed.bitOf (allowed s0 e0 (transfer alice alice 5u)) (allowed.dec s0 e0 (transfer alice alice 5u))
+def l1ok : Eq Flag (allowed.bit s0 e0 (transfer alice bob 5u)) (allowed.bitOf (allowed s0 e0 (transfer alice bob 5u)) (allowed.dec s0 e0 (transfer alice bob 5u))) := refl
+def holdsOk : allowed s0 e0 (transfer alice bob 5u) := pair refl refl
+def noBig : allowed.rule.small.holds s0 e0 (transfer alice bob 11u) -> Empty :=
+  fun (p : allowed.rule.small.holds s0 e0 (transfer alice bob 11u)) => allowed.no unit p

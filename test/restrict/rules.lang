@@ -1,0 +1,339 @@
+-- S1 U4b: the rules form on the restrict mirror (Part R: four rule tests, one rules form, rows L1 L3 L4 L6).
+-- Ported from restrict-lang a0f4784 examples/restrict.lang lines 11-147, 202, 284-291 and 312-360.
+-- Path is Eq, refl stays refl; the Part G setters are cut. U7b adds Part C at the end.
+
+-- A move: a transfer, a mint or a burn. Move is a Sum alias with one helper
+-- for each constructor.
+def Move : Type 0 := Sum (Prod Addr (Prod Addr U256)) (Sum (Prod Addr U256) (Prod Addr U256))
+def transfer : Addr -> Addr -> U256 -> Move :=
+  fun (f : Addr) (t : Addr) (x : U256) => inl (pair f (pair t x))
+def mint : Addr -> U256 -> Move := fun (t : Addr) (x : U256) => inr (inl (pair t x))
+def burn : Addr -> U256 -> Move := fun (f : Addr) (x : U256) => inr (inr (pair f x))
+
+-- The mirror state: the balances, the holder count, the holders of each class
+-- code, the lock ends, the bound token and the token that the DAO decided to
+-- bind. Part C: the used key images, the class code and the end of each
+-- registration, and the two coordinates of each ring slot. Part G: the four
+-- Params words, the issuer map and the class pass set.
+state State := makeState (bal : Map Addr U256) (holders : U256) (holdersIn : Map U256 U256) (lockEnd : Map Addr Nat) (bound : Addr) (decided : Addr) (used : Map U256 Flag) (clsOf : Map Addr U256) (expires : Map Addr Nat) (ringX : Map U256 U256) (ringY : Map U256 U256) (pCapN : U256) (pCapCN : U256) (pLockD : Nat) (pRegD : Nat) (issuers : Map Addr Flag) (passCls : Map U256 Flag)
+
+def noAddr : Addr := 0x0000000000000000000000000000000000000000
+def testToken : Addr := 0x00000000000000000000000000000000000000ee
+-- issuer0 is the S5 issuer. init holds the S4 and S5 values: the caps 2u
+-- and 3u, the lock length 86400 s, the registration length 31536000 s, the
+-- issuer issuer0 and the pass of class 0.
+def issuer0 : Addr := 0x00000000000000000000000000000000000000e1
+def init : State :=
+  makeState mapEmpty 0u mapEmpty mapEmpty noAddr testToken mapEmpty mapEmpty mapEmpty mapEmpty mapEmpty
+    2u 3u 86400 31536000 (mapSet mapEmpty issuer0 flagYes) (mapSet mapEmpty 0u flagYes)
+
+-- The class code of an address is its clsOf entry. An address that did not
+-- register has class 0.
+def clsCode : State -> Addr -> U256 := fun (s : State) (a : Addr) => mapGet (clsOf s) a
+
+def both : Flag -> Flag -> Flag := fun (a : Flag) (b : Flag) => flagIf a b flagNo
+def notF : Flag -> Flag := fun (a : Flag) => flagIf a flagNo flagYes
+def inc : U256 -> Flag -> U256 := fun (n : U256) (c : Flag) => flagIf c (u256Add n 1u) n
+def dec : U256 -> Flag -> U256 := fun (n : U256) (c : Flag) => flagIf c (u256Sub n 1u) n
+def bump : Map U256 U256 -> U256 -> Flag -> Map U256 U256 :=
+  fun (m : Map U256 U256) (k : U256) (c : Flag) => mapSet m k (inc (mapGet m k) c)
+def drop : Map U256 U256 -> U256 -> Flag -> Map U256 U256 :=
+  fun (m : Map U256 U256) (k : U256) (c : Flag) => mapSet m k (dec (mapGet m k) c)
+def later : Nat -> Nat -> Nat := fun (a : Nat) (b : Nat) => flagIf (natLe a b) b a
+
+-- The zero crossings (L6). gains b x: a balance b that gets x > 0 goes from 0
+-- to more than 0. loses b x: a balance b > 0 that gives x goes to 0.
+def gains : U256 -> U256 -> Flag := fun (b : U256) (x : U256) => both (notF (u256Eq x 0u)) (u256Eq b 0u)
+def loses : U256 -> U256 -> Flag := fun (b : U256) (x : U256) => both (notF (u256Eq b 0u)) (u256Le b x)
+
+-- A transfer. When f == t, no field changes. When x == 0, no count changes.
+def stepT : State -> Addr -> Addr -> U256 -> State :=
+  fun (s : State) (f : Addr) (t : Addr) (x : U256) =>
+    makeState
+      (mapSet (mapSet (bal s) f (flagIf (addrEq f t) (mapGet (bal s) f) (u256Sub (mapGet (bal s) f) x)))
+        t (flagIf (addrEq f t) (mapGet (bal s) t) (u256Add (mapGet (bal s) t) x)))
+      (dec (inc (holders s) (both (notF (addrEq f t)) (gains (mapGet (bal s) t) x)))
+        (both (notF (addrEq f t)) (loses (mapGet (bal s) f) x)))
+      (drop (bump (holdersIn s) (clsCode s t) (both (notF (addrEq f t)) (gains (mapGet (bal s) t) x)))
+        (clsCode s f) (both (notF (addrEq f t)) (loses (mapGet (bal s) f) x)))
+      (lockEnd s) (bound s) (decided s)
+      (used s) (clsOf s) (expires s) (ringX s) (ringY s)
+      (pCapN s) (pCapCN s) (pLockD s) (pRegD s) (issuers s) (passCls s)
+
+-- A mint. A mint of x > 0 moves the lock end of t to the later of the two
+-- times. The lock length is the state word pLockD. A mint of 0 changes
+-- nothing.
+def stepM : State -> Env -> Addr -> U256 -> State :=
+  fun (s : State) (e : Env) (t : Addr) (x : U256) =>
+    makeState
+      (mapSet (bal s) t (u256Add (mapGet (bal s) t) x))
+      (inc (holders s) (gains (mapGet (bal s) t) x))
+      (bump (holdersIn s) (clsCode s t) (gains (mapGet (bal s) t) x))
+      (mapSet (lockEnd s) t (flagIf (u256Eq x 0u) (mapGet (lockEnd s) t) (later (mapGet (lockEnd s) t) (natAdd (now e) (pLockD s)))))
+      (bound s) (decided s)
+      (used s) (clsOf s) (expires s) (ringX s) (ringY s)
+      (pCapN s) (pCapCN s) (pLockD s) (pRegD s) (issuers s) (passCls s)
+
+-- A burn.
+def stepB : State -> Addr -> U256 -> State :=
+  fun (s : State) (f : Addr) (x : U256) =>
+    makeState
+      (mapSet (bal s) f (u256Sub (mapGet (bal s) f) x))
+      (dec (holders s) (loses (mapGet (bal s) f) x))
+      (drop (holdersIn s) (clsCode s f) (loses (mapGet (bal s) f) x))
+      (lockEnd s) (bound s) (decided s)
+      (used s) (clsOf s) (expires s) (ringX s) (ringY s)
+      (pCapN s) (pCapCN s) (pLockD s) (pRegD s) (issuers s) (passCls s)
+
+-- The hook effect: balances, counts and lock ends.
+def step : State -> Env -> Move -> State :=
+  fun (s : State) (e : Env) (m : Move) =>
+    either (fun (p : Prod Addr (Prod Addr U256)) => stepT s (first p) (first (second p)) (second (second p)))
+      (fun (q : Sum (Prod Addr U256) (Prod Addr U256)) =>
+        either (fun (p : Prod Addr U256) => stepM s e (first p) (second p))
+          (fun (p : Prod Addr U256) => stepB s (first p) (second p)) q)
+      m
+
+-- L9: a token is bound and the caller is that token.
+def fromToken : State -> Env -> Flag :=
+  fun (s : State) (e : Env) => both (notF (addrEq (bound s) noAddr)) (addrEq (caller e) (bound s))
+
+-- Part R. The caps are the state words pCapN and pCapCN. capC is a class
+-- code, not a parameter. The country set S1 = {840} gives class 1 (cls), and
+-- the other countries give class 0. The country rule lets a class pass when
+-- the state map passCls holds it (init: class 0, an offer to holders outside
+-- S1 only). inSet reads the class, not the country, and an address that did
+-- not register has class 0.
+def capC : U256 := 0u
+def inS1 : U256 -> Flag := fun (n : U256) => u256Eq n 840u
+def cls : U256 -> U256 := fun (n : U256) => flagIf (inS1 n) 1u 0u
+def inSet : State -> U256 -> Flag := fun (s : State) (k : U256) => mapGet (passCls s) k
+
+-- The sender and the receiver of a move. A mint has no sender and a burn has
+-- no receiver, so each one gives noAddr (lock end 0).
+def moveFrom : Move -> Addr :=
+  fun (m : Move) =>
+    either (fun (p : Prod Addr (Prod Addr U256)) => first p)
+      (fun (q : Sum (Prod Addr U256) (Prod Addr U256)) =>
+        either (fun (p : Prod Addr U256) => noAddr) (fun (p : Prod Addr U256) => first p) q)
+      m
+def moveTo : Move -> Addr :=
+  fun (m : Move) =>
+    either (fun (p : Prod Addr (Prod Addr U256)) => first (second p))
+      (fun (q : Sum (Prod Addr U256) (Prod Addr U256)) =>
+        either (fun (p : Prod Addr U256) => first p) (fun (p : Prod Addr U256) => noAddr) q)
+      m
+
+-- The rule tests (restrict PLAN section 3.3). A cap decides on the state
+-- after the move, so a move to an address that holds tokens passes a full cap.
+def holderCap : State -> Env -> Move -> Flag :=
+  fun (s : State) (e : Env) (m : Move) => u256Le (holders (step s e m)) (pCapN s)
+def classCap : State -> Env -> Move -> Flag :=
+  fun (s : State) (e : Env) (m : Move) => u256Le (mapGet (holdersIn (step s e m)) capC) (pCapCN s)
+def countryIn : State -> Env -> Move -> Flag :=
+  fun (s : State) (e : Env) (m : Move) => inSet s (clsCode s (moveTo m))
+def lockUp : State -> Env -> Move -> Flag :=
+  fun (s : State) (e : Env) (m : Move) => natLe (mapGet (lockEnd s) (moveFrom m)) (now e)
+
+-- The form gives the proposition and the dec term of each rule, their
+-- product allowed, allowed.dec, allowed.bit and the view canTransfer.
+rules allowed State Move transfer := holderCap | classCap | countryIn | lockUp
+
+-- Setup (restrict lines 202 and 284-291).
+def selfAddr : Addr := 0x00000000000000000000000000000000000000c0
+def alice : Addr := 0x00000000000000000000000000000000000000aa
+def bob : Addr := 0x00000000000000000000000000000000000000bb
+def carol : Addr := 0x00000000000000000000000000000000000000cc
+def e0 : Env := makeEnv 100 100u testToken selfAddr
+def s1 : State := step init e0 (mint alice 5u)
+def s2 : State := step s1 e0 (mint bob 3u)
+
+-- Part R laws by refl (docs/PLAN.md section 8). e1 is the lock end of alice
+-- and bob (86500), so the lock-up passes there.
+def e1 : Env := makeEnv 86500 86500u testToken selfAddr
+def s3 : State := step s2 e1 (transfer alice bob 5u)
+def s4 : State := step s2 e1 (mint carol 1u)
+def dave : Addr := 0x00000000000000000000000000000000000000dd
+
+-- L1: the bit of canTransfer is the product of the test bits.
+def bitYes : Eq Flag (canTransfer e1 s2 alice bob 2u)
+  (both (holderCap s2 e1 (transfer alice bob 2u)) (both (classCap s2 e1 (transfer alice bob 2u))
+    (both (countryIn s2 e1 (transfer alice bob 2u)) (lockUp s2 e1 (transfer alice bob 2u))))) := refl
+def bitNo : Eq Flag (canTransfer e1 s4 alice dave 1u)
+  (both (holderCap s4 e1 (transfer alice dave 1u)) (both (classCap s4 e1 (transfer alice dave 1u))
+    (both (countryIn s4 e1 (transfer alice dave 1u)) (lockUp s4 e1 (transfer alice dave 1u))))) := refl
+def bitIsNo : Eq Flag (canTransfer e1 s4 alice dave 1u) flagNo := refl
+def bitNoCap : Eq Flag (canTransfer e1 s2 alice carol 2u)
+  (both (holderCap s2 e1 (transfer alice carol 2u)) (both (classCap s2 e1 (transfer alice carol 2u))
+    (both (countryIn s2 e1 (transfer alice carol 2u)) (lockUp s2 e1 (transfer alice carol 2u))))) := refl
+def bitIsYes : Eq Flag (canTransfer e1 s2 alice bob 2u) flagYes := refl
+-- L1 (Q-S7-2 (a)): allowed.bit is the flagIf of the tests, and it is the
+-- first bit of allowed.dec.
+def bitDecYes : Eq Flag (allowed.bit s2 e1 (transfer alice bob 2u))
+  (allowed.bitOf (allowed s2 e1 (transfer alice bob 2u)) (allowed.dec s2 e1 (transfer alice bob 2u))) := refl
+def bitDecNo : Eq Flag (allowed.bit s4 e1 (transfer alice dave 1u))
+  (allowed.bitOf (allowed s4 e1 (transfer alice dave 1u)) (allowed.dec s4 e1 (transfer alice dave 1u))) := refl
+def bitDecNoCap : Eq Flag (allowed.bit s2 e1 (transfer alice carol 2u))
+  (allowed.bitOf (allowed s2 e1 (transfer alice carol 2u)) (allowed.dec s2 e1 (transfer alice carol 2u))) := refl
+
+-- rules-cap (L3, L6): a full cap refuses a new holder and lets a move to a
+-- holder pass. A partial move keeps the count. A full move lowers it, so a
+-- new holder can then come in. f == t and x == 0 change nothing.
+def capNewHolder : Eq Flag (holderCap s2 e1 (transfer alice carol 2u)) flagNo := refl
+def capNewHolderView : Eq Flag (canTransfer e1 s2 alice carol 2u) flagNo := refl
+def capToHolder : Eq Flag (holderCap s2 e1 (transfer alice bob 2u)) flagYes := refl
+def capToHolderView : Eq Flag (canTransfer e1 s2 alice bob 2u) flagYes := refl
+def capPartialKeeps : Eq U256 (holders (step s2 e1 (transfer alice bob 2u))) 2u := refl
+def capFullToNew : Eq Flag (canTransfer e1 s2 alice carol 5u) flagYes := refl
+def capFullLowers : Eq U256 (holders s3) 1u := refl
+def capFullOpens : Eq Flag (canTransfer e1 s3 bob carol 2u) flagYes := refl
+def capSelf : Eq Flag (canTransfer e1 s2 alice alice 5u) flagYes := refl
+def capZero : Eq Flag (canTransfer e1 s2 alice carol 0u) flagYes := refl
+def classCapFull : Eq Flag (classCap s4 e1 (transfer alice dave 1u)) flagNo := refl
+def classCapHolder : Eq Flag (classCap s4 e1 (transfer alice carol 1u)) flagYes := refl
+def countryZero : Eq Flag (countryIn s2 e1 (transfer alice dave 1u)) flagYes := refl
+
+-- rules-lock (L4): now == lockEnd - 1 gives no, now == lockEnd gives yes.
+def lockBefore : Eq Flag (lockUp s2 (makeEnv 86499 86499u testToken selfAddr) (transfer alice bob 2u)) flagNo := refl
+def lockBeforeView : Eq Flag (canTransfer (makeEnv 86499 86499u testToken selfAddr) s2 alice bob 2u) flagNo := refl
+def lockAt : Eq Flag (lockUp s2 (makeEnv 86500 86500u testToken selfAddr) (transfer alice bob 2u)) flagYes := refl
+def lockAtView : Eq Flag (canTransfer (makeEnv 86500 86500u testToken selfAddr) s2 alice bob 2u) flagYes := refl
+def lockNoSender : Eq Flag (lockUp s2 e0 (mint carol 1u)) flagYes := refl
+
+-- S1 U7b: Part C, restrict lines 198-201, 203-257 and 362-433 (line 202,
+-- selfAddr, is above). Path is Eq. natAdd traps on a u64 overflow (SPEC
+-- section 6, T-1), as in restrict: regSet traps when now + pRegD is above
+-- 2^64 - 1.
+-- Part C (docs/PLAN.md sections 3.4 and 14). Q-S5-2 (a): the contract word
+-- comes from the constant selfAddr until the writer of S7. Q-S6-4 (a): an
+-- issuer is an address that the state map issuers holds. Q-S6-2 (a): the
+-- length of a registration in seconds is the state word pRegD.
+def selfWord : U256 := addrToU256 selfAddr
+
+-- Q-S5-4 (a): two key slots for each class. Slot i of class c has the key
+-- c + c + i (the kit has no u256Mul).
+def slot : U256 -> U256 -> U256 := fun (c : U256) (i : U256) => u256Add (u256Add c c) i
+def ringKey : State -> U256 -> U256 -> Prod U256 U256 :=
+  fun (s : State) (c : U256) (i : U256) => pair (mapGet (ringX s) (slot c i)) (mapGet (ringY s) (slot c i))
+def ring : State -> U256 -> List (Prod U256 U256) :=
+  fun (s : State) (c : U256) => cons (ringKey s c 0u) (cons (ringKey s c 1u) nil)
+
+-- The events of Part C. Registered shows the class and the key image only.
+event Issued (issuedClass : U256) (issuedSlot : U256)
+event Registered (regClass : U256) (regX : U256) (regY : U256)
+
+def setKey : State -> U256 -> U256 -> U256 -> State :=
+  fun (s : State) (k : U256) (kx : U256) (ky : U256) =>
+    makeState (bal s) (holders s) (holdersIn s) (lockEnd s) (bound s) (decided s)
+      (used s) (clsOf s) (expires s) (mapSet (ringX s) k kx) (mapSet (ringY s) k ky)
+      (pCapN s) (pCapCN s) (pLockD s) (pRegD s) (issuers s) (passCls s)
+
+-- issue c i kx ky: an issuer writes the key (kx, ky) into slot i of class c.
+-- A slot i > 1 is slot i - 2 of class c + 1, so issue reverts for it.
+def issue : (env : Env) -> (s : State) -> (c i kx ky : U256) -> Option (Prod State (List Out)) :=
+  fun (env : Env) (s : State) (c i kx ky : U256) =>
+    flagIf (both (mapGet (issuers s) (caller env)) (u256Le i 1u))
+      (some (pair (setKey s (slot c i) kx ky) (cons (Issued c i) nil)))
+      none
+
+-- Q-S5-5 (a), Q-S5-6 (a): the checks of register. The signature verifies over
+-- the ring of class c at the contract word, with the caller as the message.
+-- The key image (ix, iy) is not used (L7). A caller that holds tokens keeps
+-- its class, so holdersIn stays exact.
+def regOk : State -> Env -> U256 -> List U256 -> U256 -> U256 -> Flag :=
+  fun (s : State) (e : Env) (c : U256) (sig : List U256) (ix : U256) (iy : U256) =>
+    both (zkVerifyAt (ring s c) selfWord (addrToU256 (caller e)) sig)
+      (both (notF (mapGet (used s) (hash ix iy)))
+        (flagIf (u256Eq (mapGet (bal s) (caller e)) 0u) flagYes (u256Eq (clsCode s (caller e)) c)))
+def regSet : State -> Env -> U256 -> U256 -> U256 -> State :=
+  fun (s : State) (e : Env) (c : U256) (ix : U256) (iy : U256) =>
+    makeState (bal s) (holders s) (holdersIn s) (lockEnd s) (bound s) (decided s)
+      (mapSet (used s) (hash ix iy) flagYes) (mapSet (clsOf s) (caller e) c)
+      (mapSet (expires s) (caller e) (natAdd (now e) (pRegD s))) (ringX s) (ringY s)
+      (pCapN s) (pCapCN s) (pLockD s) (pRegD s) (issuers s) (passCls s)
+
+-- register c c1 s1 s2 ix iy: the five words of a signature for n = 2.
+def register : (env : Env) -> (s : State) -> (c c1 s1 s2 ix iy : U256) -> Option (Prod State (List Out)) :=
+  fun (env : Env) (s : State) (c c1 s1 s2 ix iy : U256) =>
+    flagIf (regOk s env c (cons c1 (cons s1 (cons s2 (cons ix (cons iy nil))))) ix iy)
+      (some (pair (regSet s env c ix iy) (cons (Registered c ix iy) nil)))
+      none
+
+-- L8 (Q-S5-6 (a)): a registration is live before its end. An address that
+-- did not register has the end 0.
+def isVerified : (env : Env) -> (s : State) -> (w : Addr) -> Flag :=
+  fun (env : Env) (s : State) (w : Addr) => notF (natLe (mapGet (expires s) w) (now env))
+
+-- Part C laws by refl (docs/PLAN.md section 8). The issuer issuer0 puts the keys of
+-- zkKey 0 and zkKey 1 into the ring of class 1 and the key of zkKey 2 into
+-- slot 0 of class 0. dave and erin hold no tokens. alice holds 5u in class 0.
+def gen : Prod U256 U256 := pair 1u 2u
+def k0 : Prod U256 U256 := ecMul gen (zkKey 0)
+def k1 : Prod U256 U256 := ecMul gen (zkKey 1)
+def k2 : Prod U256 U256 := ecMul gen (zkKey 2)
+def erin : Addr := 0x0000000000000000000000000000000000000099
+def eI : Env := makeEnv 100 100u issuer0 selfAddr
+def eD : Env := makeEnv 100 100u dave selfAddr
+def eE : Env := makeEnv 100 100u erin selfAddr
+def eA : Env := makeEnv 100 100u alice selfAddr
+def r1 : State := setKey (setKey (setKey s2 (slot 1u 0u) (first k0) (second k0)) (slot 1u 1u) (first k1) (second k1)) (slot 0u 0u) (first k2) (second k2)
+
+-- issue: the issuer only, and slots 0 and 1 only.
+def issueSets : Eq (Option (Prod State (List Out))) (issue eI s2 1u 0u (first k0) (second k0))
+  (some (pair (setKey s2 (slot 1u 0u) (first k0) (second k0)) (cons (Issued 1u 0u) nil))) := refl
+def issueNotIssuer : Eq (Option (Prod State (List Out))) (issue eD s2 1u 0u (first k0) (second k0)) none := refl
+def issueNoSlot2 : Eq (Option (Prod State (List Out))) (issue eI s2 1u 2u (first k0) (second k0)) none := refl
+def ringSlot : Eq (Prod U256 U256) (ringKey r1 1u 1u) k1 := refl
+
+-- The key image of zkKey j at the word w.
+def imgAt : Nat -> U256 -> Prod U256 U256 :=
+  fun (j : Nat) (w : U256) => ecMul (zkHpAt (ecMul gen (zkKey j)) w) (zkKey j)
+def img0 : Prod U256 U256 := imgAt 0 selfWord
+def img1 : Prod U256 U256 := imgAt 1 selfWord
+def img2 : Prod U256 U256 := imgAt 2 selfWord
+def sigD : List U256 := zkSignAt (ring r1 1u) (zkKey 0) selfWord (addrToU256 dave)
+def sigE : List U256 := zkSignAt (ring r1 1u) (zkKey 0) selfWord (addrToU256 erin)
+def r2 : State := regSet r1 eD 1u (first img0) (second img0)
+
+-- register: the signature of dave verifies at the contract word, for dave and
+-- class 1 only.
+def regDave : Eq Flag (regOk r1 eD 1u sigD (first img0) (second img0)) flagYes := refl
+def regOtherCaller : Eq Flag (regOk r1 eE 1u sigD (first img0) (second img0)) flagNo := refl
+def regOtherClass : Eq Flag (regOk r1 eD 0u sigD (first img0) (second img0)) flagNo := refl
+def regOtherWord : Eq Flag (zkVerifyAt (ring r1 1u) (addrToU256 testToken) (addrToU256 dave) sigD) flagNo := refl
+-- bylaw R4: an event field is a domain name, so restrict row regClass is regDaveClass.
+def regDaveClass : Eq U256 (clsCode r2 dave) 1u := refl
+
+-- L7: after dave registers, the key image of zkKey 0 is used. The signature of
+-- erin with the same key verifies, but erin cannot register. At another
+-- contract word the key image is another point (O8).
+def l7Verifies : Eq Flag (zkVerifyAt (ring r2 1u) selfWord (addrToU256 erin) sigE) flagYes := refl
+def l7Used : Eq Flag (regOk r2 eE 1u sigE (first img0) (second img0)) flagNo := refl
+def l7Context : Eq Flag (u256Eq (first img0) (first (imgAt 0 (addrToU256 testToken)))) flagNo := refl
+
+-- Q-S5-6 (a): alice holds tokens in class 0, so a register into class 1
+-- reverts and a register into class 0 is valid. A renewal in the same class
+-- with a new key is valid (O10).
+def sigA1 : List U256 := zkSignAt (ring r1 1u) (zkKey 1) selfWord (addrToU256 alice)
+def sigA0 : List U256 := zkSignAt (ring r1 0u) (zkKey 2) selfWord (addrToU256 alice)
+def sigR : List U256 := zkSignAt (ring r2 1u) (zkKey 1) selfWord (addrToU256 dave)
+def holderMoves : Eq Flag (regOk r1 eA 1u sigA1 (first img1) (second img1)) flagNo := refl
+def holderStays : Eq Flag (regOk r1 eA 0u sigA0 (first img2) (second img2)) flagYes := refl
+def renewDave : Eq Flag (regOk r2 (makeEnv 200 200u dave selfAddr) 1u sigR (first img1) (second img1)) flagYes := refl
+
+-- L8: the registration of dave ends at 100 + regD.
+def l8Live : Eq Flag (isVerified (makeEnv 31536099 31536099u dave selfAddr) r2 dave) flagYes := refl
+def l8End : Eq Flag (isVerified (makeEnv 31536100 31536100u dave selfAddr) r2 dave) flagNo := refl
+def l8None : Eq Flag (isVerified e0 r2 erin) flagNo := refl
+
+-- L2 (Q-S5-3 (a)): two countries of one class get one class and one answer.
+-- After dave registers class 1, a full move to dave fails the country rule
+-- only. erin did not register (class 0) and passes.
+def l2Class : Eq U256 (cls 250u) (cls 276u) := refl
+def l2Rule : Eq Flag (inSet init (cls 250u)) (inSet init (cls 276u)) := refl
+def l2S1 : Eq U256 (cls 840u) 1u := refl
+def l2S1Rule : Eq Flag (inSet init (cls 840u)) flagNo := refl
+def l2Dave : Eq Flag (countryIn r2 e1 (transfer alice dave 5u)) flagNo := refl
+def l2DaveView : Eq Flag (canTransfer e1 r2 alice dave 5u) flagNo := refl
+def l2DaveCap : Eq Flag (both (holderCap r2 e1 (transfer alice dave 5u)) (both (classCap r2 e1 (transfer alice dave 5u)) (lockUp r2 e1 (transfer alice dave 5u)))) flagYes := refl
+def l2ErinView : Eq Flag (canTransfer e1 r2 alice erin 5u) flagYes := refl

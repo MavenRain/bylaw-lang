@@ -1,0 +1,163 @@
+-- S1 U3 (restrict-lang a0f4784 examples/mirror.lang lines 5-102 and 118-152;
+-- setBound, bindToken and unbindToken are cut, Path is Eq, init is bound).
+-- The defs at the end replay test/run/mirror.script without the bind lines;
+-- outN is step N of test/run/mirror.out, tN is the state after step N.
+
+-- A move: a transfer, a mint or a burn. A program cannot declare a family
+-- (REFUSE_DATA), so Move is a Sum alias with one helper for each constructor.
+def Move : Type 0 := Sum (Prod Addr (Prod Addr U256)) (Sum (Prod Addr U256) (Prod Addr U256))
+def transfer : Addr -> Addr -> U256 -> Move :=
+  fun (f : Addr) (t : Addr) (x : U256) => inl (pair f (pair t x))
+def mint : Addr -> U256 -> Move := fun (t : Addr) (x : U256) => inr (inl (pair t x))
+def burn : Addr -> U256 -> Move := fun (f : Addr) (x : U256) => inr (inr (pair f x))
+
+-- The mirror state: the balances, the holder count, the holders of each class
+-- code, the lock ends, the bound token and the token that the DAO decided to
+-- bind (Q-S3-2 (a): init sets it until S6).
+state State := makeState (bal : Map Addr U256) (holders : U256) (holdersIn : Map U256 U256) (lockEnd : Map Addr Nat) (bound : Addr) (decided : Addr)
+
+def noAddr : Addr := 0x0000000000000000000000000000000000000000
+def testToken : Addr := 0x00000000000000000000000000000000000000ee
+def init : State := makeState mapEmpty 0u mapEmpty mapEmpty testToken testToken
+
+-- Q-S3-3 (a): the lock length in seconds until Params (S6).
+def lockD : Nat := 86400
+
+-- Q-S3-1 (a): the class code of an address. S5 changes the body to read clsOf.
+def clsCode : State -> Addr -> U256 := fun (s : State) (a : Addr) => 0u
+
+def both : Flag -> Flag -> Flag := fun (a : Flag) (b : Flag) => flagIf a b flagNo
+def notF : Flag -> Flag := fun (a : Flag) => flagIf a flagNo flagYes
+def inc : U256 -> Flag -> U256 := fun (n : U256) (c : Flag) => flagIf c (u256Add n 1u) n
+def dec : U256 -> Flag -> U256 := fun (n : U256) (c : Flag) => flagIf c (u256Sub n 1u) n
+def bump : Map U256 U256 -> U256 -> Flag -> Map U256 U256 :=
+  fun (m : Map U256 U256) (k : U256) (c : Flag) => mapSet m k (inc (mapGet m k) c)
+def drop : Map U256 U256 -> U256 -> Flag -> Map U256 U256 :=
+  fun (m : Map U256 U256) (k : U256) (c : Flag) => mapSet m k (dec (mapGet m k) c)
+def later : Nat -> Nat -> Nat := fun (a : Nat) (b : Nat) => flagIf (natLe a b) b a
+
+-- The zero crossings (L6). gains b x: a balance b that gets x > 0 goes from 0
+-- to more than 0. loses b x: a balance b > 0 that gives x goes to 0.
+def gains : U256 -> U256 -> Flag := fun (b : U256) (x : U256) => both (notF (u256Eq x 0u)) (u256Eq b 0u)
+def loses : U256 -> U256 -> Flag := fun (b : U256) (x : U256) => both (notF (u256Eq b 0u)) (u256Le b x)
+
+-- A transfer. When f == t, no field changes. When x == 0, no count changes.
+def stepT : State -> Addr -> Addr -> U256 -> State :=
+  fun (s : State) (f : Addr) (t : Addr) (x : U256) =>
+    makeState
+      (mapSet (mapSet (bal s) f (flagIf (addrEq f t) (mapGet (bal s) f) (u256Sub (mapGet (bal s) f) x)))
+        t (flagIf (addrEq f t) (mapGet (bal s) t) (u256Add (mapGet (bal s) t) x)))
+      (dec (inc (holders s) (both (notF (addrEq f t)) (gains (mapGet (bal s) t) x)))
+        (both (notF (addrEq f t)) (loses (mapGet (bal s) f) x)))
+      (drop (bump (holdersIn s) (clsCode s t) (both (notF (addrEq f t)) (gains (mapGet (bal s) t) x)))
+        (clsCode s f) (both (notF (addrEq f t)) (loses (mapGet (bal s) f) x)))
+      (lockEnd s) (bound s) (decided s)
+
+-- A mint. A mint of x > 0 moves the lock end of t to the later of the two
+-- times (Q7 (a)). A mint of 0 changes nothing.
+def stepM : State -> Env -> Addr -> U256 -> State :=
+  fun (s : State) (e : Env) (t : Addr) (x : U256) =>
+    makeState
+      (mapSet (bal s) t (u256Add (mapGet (bal s) t) x))
+      (inc (holders s) (gains (mapGet (bal s) t) x))
+      (bump (holdersIn s) (clsCode s t) (gains (mapGet (bal s) t) x))
+      (mapSet (lockEnd s) t (flagIf (u256Eq x 0u) (mapGet (lockEnd s) t) (later (mapGet (lockEnd s) t) (natAdd (now e) lockD))))
+      (bound s) (decided s)
+
+-- A burn.
+def stepB : State -> Addr -> U256 -> State :=
+  fun (s : State) (f : Addr) (x : U256) =>
+    makeState
+      (mapSet (bal s) f (u256Sub (mapGet (bal s) f) x))
+      (dec (holders s) (loses (mapGet (bal s) f) x))
+      (drop (holdersIn s) (clsCode s f) (loses (mapGet (bal s) f) x))
+      (lockEnd s) (bound s) (decided s)
+
+-- The hook effect: balances, counts and lock ends.
+def step : State -> Env -> Move -> State :=
+  fun (s : State) (e : Env) (m : Move) =>
+    either (fun (p : Prod Addr (Prod Addr U256)) => stepT s (first p) (first (second p)) (second (second p)))
+      (fun (q : Sum (Prod Addr U256) (Prod Addr U256)) =>
+        either (fun (p : Prod Addr U256) => stepM s e (first p) (second p))
+          (fun (p : Prod Addr U256) => stepB s (first p) (second p)) q)
+      m
+
+-- L9: a token is bound and the caller is that token.
+def fromToken : State -> Env -> Flag :=
+  fun (s : State) (e : Env) => both (notF (addrEq (bound s) noAddr)) (addrEq (caller e) (bound s))
+
+-- The hooks. Each one runs step. No hook reverts for a rule (Q9 (a)).
+def transferred : (env : Env) -> (s : State) -> (f t : Addr) -> (x : U256) -> Option (Prod State (List Out)) :=
+  fun (env : Env) (s : State) (f t : Addr) (x : U256) =>
+    flagIf (fromToken s env) (some (pair (step s env (transfer f t x)) nil)) none
+def created : (env : Env) -> (s : State) -> (t : Addr) -> (x : U256) -> Option (Prod State (List Out)) :=
+  fun (env : Env) (s : State) (t : Addr) (x : U256) =>
+    flagIf (fromToken s env) (some (pair (step s env (mint t x)) nil)) none
+def destroyed : (env : Env) -> (s : State) -> (f : Addr) -> (x : U256) -> Option (Prod State (List Out)) :=
+  fun (env : Env) (s : State) (f : Addr) (x : U256) =>
+    flagIf (fromToken s env) (some (pair (step s env (burn f x)) nil)) none
+
+-- The binding events. bylaw S1 cuts bindToken and unbindToken (amendments
+-- bind the token later), so init holds the bound token.
+event TokenBound (boundToken : Addr)
+event TokenUnbound (unboundToken : Addr)
+-- Views.
+def isTokenBound : (env : Env) -> (s : State) -> (t : Addr) -> Flag :=
+  fun (env : Env) (s : State) (t : Addr) => both (notF (addrEq t noAddr)) (addrEq t (bound s))
+def getTokenBound : (env : Env) -> (s : State) -> Addr := fun (env : Env) (s : State) => bound s
+def balanceOf : (env : Env) -> (s : State) -> (a : Addr) -> U256 :=
+  fun (env : Env) (s : State) (a : Addr) => mapGet (bal s) a
+def holderCount : (env : Env) -> (s : State) -> U256 := fun (env : Env) (s : State) => holders s
+def lockOf : (env : Env) -> (s : State) -> (a : Addr) -> Nat :=
+  fun (env : Env) (s : State) (a : Addr) => mapGet (lockEnd s) a
+
+-- L6 by refl on small states (docs/PLAN.md section 8).
+def alice : Addr := 0x00000000000000000000000000000000000000aa
+def bob : Addr := 0x00000000000000000000000000000000000000bb
+def carol : Addr := 0x00000000000000000000000000000000000000cc
+def selfAddr : Addr := 0x00000000000000000000000000000000000000c0
+def e0 : Env := makeEnv 100 100u testToken selfAddr
+def s1 : State := step init e0 (mint alice 5u)
+def s2 : State := step s1 e0 (mint bob 3u)
+
+def mintNew : Eq U256 (holders s1) 1u := refl
+def mintHolder : Eq U256 (holders (step s2 e0 (mint alice 1u))) 2u := refl
+def partialKeeps : Eq U256 (holders (step s2 e0 (transfer alice bob 2u))) 2u := refl
+def fullLowers : Eq U256 (holders (step s2 e0 (transfer alice bob 5u))) 1u := refl
+def newHolderRaises : Eq U256 (holders (step s2 e0 (transfer alice carol 2u))) 3u := refl
+def fullToNewKeeps : Eq U256 (holders (step s2 e0 (transfer alice carol 5u))) 2u := refl
+def selfNothing : Eq State (step s2 e0 (transfer alice alice 5u)) s2 := refl
+def zeroNothing : Eq State (step s2 e0 (transfer alice bob 0u)) s2 := refl
+def zeroMintNothing : Eq State (step s2 e0 (mint carol 0u)) s2 := refl
+def burnFull : Eq U256 (holders (step s2 e0 (burn bob 3u))) 1u := refl
+def burnPartial : Eq U256 (holders (step s2 e0 (burn bob 1u))) 2u := refl
+def classFull : Eq U256 (mapGet (holdersIn (step s2 e0 (transfer alice bob 5u))) 0u) 1u := refl
+def balMoved : Eq U256 (mapGet (bal (step s2 e0 (transfer alice bob 2u))) bob) 5u := refl
+def lockSet : Eq Nat (mapGet (lockEnd s1) alice) 86500 := refl
+def lockLater : Eq Nat (mapGet (lockEnd (step s1 (makeEnv 50 50u testToken selfAddr) (mint alice 1u))) alice) 86500 := refl
+def lockNoTransferIn : Eq Nat (mapGet (lockEnd (step s2 e0 (transfer alice carol 2u))) carol) 0 := refl
+
+-- The script replay.
+def envAt : Nat -> U256 -> Addr -> Env := fun (n : Nat) (b : U256) (c : Addr) => makeEnv n b c selfAddr
+def after : State -> Option (Prod State (List Out)) -> State :=
+  fun (s : State) (r : Option (Prod State (List Out))) => option s (fun (p : Prod State (List Out)) => first p) r
+def out1 : Option (Prod State (List Out)) := created (envAt 99 99u noAddr) init alice 1u
+def out5 : Flag := isTokenBound (envAt 103 103u bob) init testToken
+def out6 : Addr := getTokenBound (envAt 104 104u bob) init
+def out7 : Option (Prod State (List Out)) := created (envAt 105 105u testToken) init alice 5u
+def t7 : State := after init out7
+def out8 : Option (Prod State (List Out)) := transferred (envAt 106 106u bob) t7 alice carol 2u
+def out9 : Option (Prod State (List Out)) := created (envAt 107 107u bob) t7 bob 1u
+def out10 : Option (Prod State (List Out)) := destroyed (envAt 108 108u bob) t7 alice 1u
+def out11 : Option (Prod State (List Out)) := transferred (envAt 109 109u testToken) t7 alice carol 2u
+def t11 : State := after t7 out11
+def out12 : U256 := holderCount (envAt 110 110u bob) t11
+def out13 : Option (Prod State (List Out)) := destroyed (envAt 111 111u testToken) t11 carol 2u
+def t13 : State := after t11 out13
+def out14 : U256 := holderCount (envAt 112 112u bob) t13
+def out15 : U256 := balanceOf (envAt 113 113u bob) t13 alice
+def out16 : Nat := lockOf (envAt 114 114u bob) t13 alice
+
+-- The events: an event value and a list of Out.
+def ev1 : Out := TokenBound testToken
+def evs : List Out := cons (TokenBound testToken) (cons (TokenUnbound alice) nil)
